@@ -16,8 +16,6 @@ func cmdEnroll(args []string) {
 	hostname := fs.String("hostname", "", "host name to register (default: system hostname)")
 	dir := fs.String("dir", daemon.DefaultDir, "state directory")
 	sshUser := fs.String("ssh-user", "custos", "AuthorizedKeysCommandUser")
-	sshDir := fs.String("ssh-dir", "", "ssh config directory (default: /etc/ssh)")
-	noSSHD := fs.Bool("no-sshd", false, "skip writing the sshd drop-in")
 	fs.Parse(args)
 
 	if *controlPlane == "" || *token == "" {
@@ -45,30 +43,28 @@ func cmdEnroll(args []string) {
 	}
 	fmt.Println("enrolled with control plane")
 
-	if !*noSSHD {
-		setupSSHD(*sshDir, *sshUser)
-	}
+	setupSSHD(*sshUser)
 }
 
-func setupSSHD(sshDir, sshUser string) {
+func setupSSHD(sshUser string) {
 	binaryPath, err := os.Executable()
 	if err != nil {
 		fatal("enroll: cannot resolve own path: %v", err)
 	}
 
-	if ok, err := daemon.HasInclude(sshDir); err != nil {
+	if ok, err := daemon.HasInclude(""); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: cannot read sshd_config: %v\n", err)
 	} else if !ok {
 		fmt.Fprintln(os.Stderr, "warning: sshd_config does not include the drop-in dir; add this line and reload sshd:")
 		fmt.Fprintln(os.Stderr, "  Include /etc/ssh/sshd_config.d/*.conf")
 	}
 
-	path, err := daemon.WriteDropIn(sshDir, binaryPath, sshUser)
+	path, err := daemon.WriteDropIn("", binaryPath, sshUser)
 	if err != nil {
 		fatal("enroll: write sshd drop-in: %v", err)
 	}
 	if err := daemon.Validate(); err != nil {
-		daemon.RemoveDropIn(sshDir)
+		daemon.RemoveDropIn("")
 		fatal("enroll: sshd config invalid, rolled back: %v", err)
 	}
 	if err := daemon.Reload(); err != nil {
