@@ -1,0 +1,104 @@
+// Package daemon implements custosd: the per-host agent that answers sshd's
+// authorized-key lookups and stays in sync with the control plane.
+package daemon
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+
+	"github.com/tofunmiadewuyi/custos/internal/identity"
+)
+
+const (
+	DefaultDir = "/var/lib/custos"
+
+	configFile   = "config.json"
+	identityFile = "identity.key"
+	cacheFile    = "cache.json"
+)
+
+// Config is the daemon's persisted settings, written at enrollment.
+type Config struct {
+	ControlPlane string `json:"control_plane"`
+	HostID       string `json:"host_id"`
+}
+
+// Store is the daemon's on-disk state directory.
+type Store struct {
+	dir string
+}
+
+// OpenStore ensures the state directory exists (private to the daemon user).
+func OpenStore(dir string) (*Store, error) {
+	if dir == "" {
+		dir = DefaultDir
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	return &Store{dir: dir}, nil
+}
+
+// Enrolled reports whether this host has an identity key yet.
+func (s *Store) Enrolled() bool {
+	_, err := os.Stat(s.path(identityFile))
+	return err == nil
+}
+
+func (s *Store) LoadConfig() (Config, error) {
+	var c Config
+	data, err := os.ReadFile(s.path(configFile))
+	if err != nil {
+		return c, err
+	}
+	return c, json.Unmarshal(data, &c)
+}
+
+func (s *Store) SaveConfig(c Config) error {
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicWrite(s.path(configFile), data, 0o600)
+}
+
+func (s *Store) LoadIdentity() (*identity.KeyPair, error) {
+	data, err := os.ReadFile(s.path(identityFile))
+	if err != nil {
+		return nil, err
+	}
+	return identity.LoadKeyPair(string(data))
+}
+
+func (s *Store) SaveIdentity(kp *identity.KeyPair) error {
+	return atomicWrite(s.path(identityFile), []byte(kp.PrivateKey()), 0o600)
+}
+
+func (s *Store) path(name string) string {
+	return filepath.Join(s.dir, name)
+}
+
+// atomicWrite writes to a temp file in the same directory and renames it into
+// place, so a crash mid-write can never leave a partial file.
+func atomicWrite(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once renamed
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
