@@ -6,10 +6,7 @@ import (
 	"errors"
 )
 
-// AESWrapper locks data keys with a master key held in process memory, using
-// AES-256-GCM. It suits development and deployments that manage the master key
-// themselves. Production should prefer a KMS/HSM-backed KeyWrapper so the
-// master key never resides in this process.
+// AESWrapper wraps data keys with an in-process AES-256-GCM master key; prefer a KMS/HSM wrapper in production.
 type AESWrapper struct {
 	master []byte
 }

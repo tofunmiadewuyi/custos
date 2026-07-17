@@ -1,13 +1,4 @@
-// Package hybrid provides hybrid public-key encryption for API<->frontend
-// payloads. An ephemeral X25519 key agreement (ECDH) derives a one-time
-// AES-256-GCM key, so the sender can encrypt directly to the recipient's public
-// key and TLS-terminating intermediaries never see plaintext.
-//
-// To decrypt, a recipient needs only its own private key plus the ephemeral
-// public key carried in the message. The ephemeral keypair is generated and
-// discarded inside Seal, per message.
-//
-// Wire format of a sealed message: ephemeralPublicKey(32) ‖ nonce(12) ‖ ciphertext.
+// Package hybrid does ECDH/X25519 hybrid public-key encryption for API<->frontend payloads (ephemeral key agreement + AES-256-GCM).
 package hybrid
 
 import (
@@ -26,8 +17,7 @@ const (
 	hkdfInfo = "custos-hybrid:v1"
 )
 
-// GenerateKeyPair returns a new static X25519 keypair as raw bytes. The caller
-// keeps the private key and publishes the public key to whoever encrypts to it.
+// GenerateKeyPair returns a new static X25519 keypair as raw bytes.
 func GenerateKeyPair() (privateKey, publicKey []byte, err error) {
 	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -36,8 +26,7 @@ func GenerateKeyPair() (privateKey, publicKey []byte, err error) {
 	return priv.Bytes(), priv.PublicKey().Bytes(), nil
 }
 
-// Seal encrypts plaintext to recipientPublic. The returned message is
-// self-contained and safe to hand to any transport.
+// Seal encrypts plaintext to recipientPublic, returning a self-contained message: ephemeralPub(32) ‖ nonce(12) ‖ ciphertext.
 func Seal(recipientPublic, plaintext []byte) ([]byte, error) {
 	curve := ecdh.X25519()
 	recipient, err := curve.NewPublicKey(recipientPublic)
@@ -107,8 +96,7 @@ func Open(recipientPrivate, sealed []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// deriveGCM turns the shared secret into an AES-256-GCM cipher, binding both
-// public keys into the derivation so the key is tied to this exact exchange.
+// deriveGCM turns the shared secret into an AES-256-GCM cipher, binding both public keys as HKDF salt.
 func deriveGCM(shared, ephemeralPub, recipientPub []byte) (cipher.AEAD, error) {
 	salt := append(append([]byte{}, ephemeralPub...), recipientPub...)
 	key, err := hkdf.Key(sha256.New, shared, salt, hkdfInfo, keySize)
