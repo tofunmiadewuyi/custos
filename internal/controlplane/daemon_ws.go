@@ -36,20 +36,20 @@ func (s *Server) handleDaemon(w http.ResponseWriter, r *http.Request) {
 		conn.Close(websocket.StatusPolicyViolation, "authentication failed")
 		return
 	}
+	hostID := uuidString(host.ID)
 
-	snapshot, err := s.buildSnapshot(ctx, host)
-	if err != nil {
-		return
-	}
-	env, err := protocol.NewEnvelope(protocol.TypeSnapshot, snapshot)
-	if err != nil {
-		return
-	}
-	if err := wsjson.Write(ctx, conn, env); err != nil {
-		return
+	send := make(chan protocol.Envelope, 32)
+	s.hub.register(hostID, send)
+	defer s.hub.unregister(hostID, send)
+
+	// initial snapshot for the writer to send first
+	if snapshot, err := s.buildSnapshot(ctx, host); err == nil {
+		if env, err := protocol.NewEnvelope(protocol.TypeSnapshot, snapshot); err == nil {
+			send <- env
+		}
 	}
 
-	go s.pingDaemon(ctx, cancel, conn)
+	go s.writeDaemon(ctx, cancel, conn, send)
 	s.readDaemon(ctx, conn, host)
 }
 
@@ -115,7 +115,9 @@ func (s *Server) buildSnapshot(ctx context.Context, host db.Host) (protocol.Snap
 	return protocol.Snapshot{Entries: entries}, nil
 }
 
-func (s *Server) pingDaemon(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn) {
+// writeDaemon is the sole writer to the connection: it pings on a ticker and
+// forwards messages pushed onto the send chanel
+func (s *Server) writeDaemon(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, send chan protocol.Envelope) {
 	ticker := time.NewTicker(daemonPingEvery)
 	defer ticker.Stop()
 	for {
@@ -125,6 +127,11 @@ func (s *Server) pingDaemon(ctx context.Context, cancel context.CancelFunc, conn
 		case <-ticker.C:
 			ping, _ := protocol.NewEnvelope(protocol.TypePing, nil)
 			if err := wsjson.Write(ctx, conn, ping); err != nil {
+				cancel()
+				return
+			}
+		case env := <-send:
+			if err := wsjson.Write(ctx, conn, env); err != nil {
 				cancel()
 				return
 			}
@@ -161,6 +168,7 @@ func (s *Server) recordAccessLog(ctx context.Context, host db.Host, lg protocol.
 		Account:     lg.Account,
 		Allowed:     lg.Allowed,
 		At:          pgtype.Timestamptz{Time: lg.At, Valid: true},
+		Fingerprint: lg.Fingerprint,
 	})
 	s.q.TouchHostSeen(ctx, host.ID)
 }

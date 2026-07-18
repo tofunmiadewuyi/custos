@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -10,6 +11,8 @@ import (
 )
 
 func cmdServe(args []string) {
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
 	cfg, err := controlplane.LoadConfig()
 	if err != nil {
 		fatal("serve: %v", err)
@@ -24,7 +27,7 @@ func cmdServe(args []string) {
 	}
 	defer pool.Close()
 
-	log.Printf("control plane listening on %s", cfg.ListenAddr)
+	slog.Info("control plane listening", "addr", cfg.ListenAddr, "encryption", cfg.EncryptionEnabled)
 	if err := controlplane.NewServer(cfg, pool).Serve(ctx); err != nil {
 		fatal("serve: %v", err)
 	}

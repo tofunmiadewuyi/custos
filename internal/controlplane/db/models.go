@@ -8,6 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AccessToken struct {
+	ID        pgtype.UUID
+	SessionID pgtype.UUID
+	TokenHash string
+	ExpiresAt pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type EnrollmentToken struct {
 	ID        pgtype.UUID
 	TokenHash string
@@ -70,6 +78,15 @@ type Invitation struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type PasswordReset struct {
+	ID        pgtype.UUID
+	UserID    pgtype.UUID
+	TokenHash string
+	ExpiresAt pgtype.Timestamptz
+	UsedAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
+}
+
 type Permission struct {
 	Key         string
 	Description string
@@ -129,6 +146,7 @@ type SshAccessLog struct {
 	Account     string
 	Allowed     bool
 	At          pgtype.Timestamptz
+	Fingerprint string
 }
 
 type User struct {

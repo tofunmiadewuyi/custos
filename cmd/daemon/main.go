@@ -11,6 +11,8 @@ func main() {
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "install":
+		cmdInstall(os.Args[2:])
 	case "enroll":
 		cmdEnroll(os.Args[2:])
 	case "authkeys":

@@ -13,7 +13,7 @@ func TestWriteDropIn(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, err := WriteDropIn(dir, "/usr/local/bin/custosd", "custos")
+	path, err := WriteDropIn(dir, "/usr/local/bin/custosd", "custos", "/var/lib/custos", "/run/custosd.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +23,7 @@ func TestWriteDropIn(t *testing.T) {
 	}
 	content := string(data)
 	for _, want := range []string{
-		"AuthorizedKeysCommand /usr/local/bin/custosd authkeys %u %t %k",
+		"AuthorizedKeysCommand /usr/local/bin/custosd authkeys --dir /var/lib/custos --socket /run/custosd.sock %u %t %k",
 		"AuthorizedKeysCommandUser custos",
 	} {
 		if !strings.Contains(content, want) {

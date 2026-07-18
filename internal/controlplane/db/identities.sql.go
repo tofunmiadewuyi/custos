@@ -76,3 +76,18 @@ func (q *Queries) TouchIdentityLogin(ctx context.Context, id pgtype.UUID) error 
 	_, err := q.db.Exec(ctx, touchIdentityLogin, id)
 	return err
 }
+
+const updatePasswordIdentity = `-- name: UpdatePasswordIdentity :exec
+update identities set password_hash = $2
+where user_id = $1 and provider = 'password'
+`
+
+type UpdatePasswordIdentityParams struct {
+	UserID       pgtype.UUID
+	PasswordHash pgtype.Text
+}
+
+func (q *Queries) UpdatePasswordIdentity(ctx context.Context, arg UpdatePasswordIdentityParams) error {
+	_, err := q.db.Exec(ctx, updatePasswordIdentity, arg.UserID, arg.PasswordHash)
+	return err
+}

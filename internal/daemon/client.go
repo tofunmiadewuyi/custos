@@ -169,7 +169,7 @@ func (c *Client) dispatch(env protocol.Envelope, send chan protocol.Envelope) er
 		send <- pong
 		return nil
 	default:
-		return nil // ignore unknown message types for forward compatibility
+		return nil // ignore unknown message types 
 	}
 }
 

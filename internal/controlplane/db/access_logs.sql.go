@@ -31,8 +31,8 @@ func (q *Queries) GetPublicKeyByFingerprint(ctx context.Context, fingerprint str
 }
 
 const insertSSHAccessLog = `-- name: InsertSSHAccessLog :exec
-insert into ssh_access_logs (host_id, public_key_id, account, allowed, at)
-values ($1, $2, $3, $4, $5)
+insert into ssh_access_logs (host_id, public_key_id, account, allowed, at, fingerprint)
+values ($1, $2, $3, $4, $5, $6)
 `
 
 type InsertSSHAccessLogParams struct {
@@ -41,6 +41,7 @@ type InsertSSHAccessLogParams struct {
 	Account     string
 	Allowed     bool
 	At          pgtype.Timestamptz
+	Fingerprint string
 }
 
 func (q *Queries) InsertSSHAccessLog(ctx context.Context, arg InsertSSHAccessLogParams) error {
@@ -50,6 +51,7 @@ func (q *Queries) InsertSSHAccessLog(ctx context.Context, arg InsertSSHAccessLog
 		arg.Account,
 		arg.Allowed,
 		arg.At,
+		arg.Fingerprint,
 	)
 	return err
 }

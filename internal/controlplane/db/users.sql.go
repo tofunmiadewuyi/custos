@@ -48,6 +48,15 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 	return i, err
 }
 
+const deleteUserIdentities = `-- name: DeleteUserIdentities :exec
+delete from identities where user_id = $1
+`
+
+func (q *Queries) DeleteUserIdentities(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUserIdentities, userID)
+	return err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 select id, email, name, role, status, created_at from users where email = $1
 `
@@ -82,4 +91,92 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listUsers = `-- name: ListUsers :many
+select id, email, name, role, status, created_at from users order by email
+`
+
+func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
+	rows, err := q.db.Query(ctx, listUsers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.Role,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const revokeAllUserGrants = `-- name: RevokeAllUserGrants :exec
+update grants set revoked_at = now() where user_id = $1 and revoked_at is null
+`
+
+func (q *Queries) RevokeAllUserGrants(ctx context.Context, userID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, revokeAllUserGrants, userID)
+	return err
+}
+
+const setUserStatus = `-- name: SetUserStatus :execrows
+update users set status = $2 where id = $1
+`
+
+type SetUserStatusParams struct {
+	ID     pgtype.UUID
+	Status string
+}
+
+func (q *Queries) SetUserStatus(ctx context.Context, arg SetUserStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setUserStatus, arg.ID, arg.Status)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const userGrantedHostIDs = `-- name: UserGrantedHostIDs :many
+select distinct h.id
+from hosts h
+join grants g on g.user_id = $1 and g.permission = 'host.access' and g.revoked_at is null
+  and (
+    (g.target_kind = 'host' and g.target_id = h.id)
+    or (g.target_kind = 'group' and g.target_id in (
+      select group_id from group_resources where resource_kind = 'host' and resource_id = h.id))
+  )
+`
+
+func (q *Queries) UserGrantedHostIDs(ctx context.Context, userID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, userGrantedHostIDs, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

@@ -65,6 +65,49 @@ func (q *Queries) GetHostByID(ctx context.Context, id pgtype.UUID) (Host, error)
 	return i, err
 }
 
+const listHosts = `-- name: ListHosts :many
+select id, name, hostname, accounts, status, enrolled_at, last_seen_at
+from hosts order by name
+`
+
+type ListHostsRow struct {
+	ID         pgtype.UUID
+	Name       string
+	Hostname   string
+	Accounts   []string
+	Status     string
+	EnrolledAt pgtype.Timestamptz
+	LastSeenAt pgtype.Timestamptz
+}
+
+func (q *Queries) ListHosts(ctx context.Context) ([]ListHostsRow, error) {
+	rows, err := q.db.Query(ctx, listHosts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostsRow{}
+	for rows.Next() {
+		var i ListHostsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Hostname,
+			&i.Accounts,
+			&i.Status,
+			&i.EnrolledAt,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const touchHostSeen = `-- name: TouchHostSeen :exec
 update hosts set last_seen_at = now() where id = $1
 `

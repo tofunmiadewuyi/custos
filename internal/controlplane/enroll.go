@@ -32,7 +32,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		http.Error(w, "enrollment failed", http.StatusInternalServerError)
+		serverError(w, "enrollment failed", err)
 		return
 	}
 	writeJSON(w, protocol.EnrollResponse{HostID: hostID})

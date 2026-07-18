@@ -16,21 +16,31 @@ const (
 // dropInContent points sshd's AuthorizedKeysCommand at this binary, so sshd
 // asks custosd for the authorized keys on every login. The %% escapes produce
 // literal %u %t %k tokens that sshd expands to user, key type, and key blob.
-func dropInContent(binaryPath, user string) string {
+func dropInContent(binaryPath, user, stateDir, socket string) string {
 	return fmt.Sprintf(`# Managed by custos. Do not edit.
-AuthorizedKeysCommand %s authkeys %%u %%t %%k
+AuthorizedKeysCommand %s authkeys --dir %s --socket %s %%u %%t %%k
 AuthorizedKeysCommandUser %s
-`, binaryPath, user)
+`, binaryPath, stateDir, socket, user)
+}
+
+// DropInContent is the sshd config to place by hand if enroll can't write it.
+func DropInContent(binaryPath, user, stateDir, socket string) string {
+	return dropInContent(binaryPath, user, stateDir, socket)
+}
+
+// DropInPath is where the drop-in file lives.
+func DropInPath() string {
+	return filepath.Join(sshDir, "sshd_config.d", dropInName)
 }
 
 // WriteDropIn writes our config into sshd's drop-in directory. It owns only
 // this one file and never touches the main sshd_config. Returns the path.
-func WriteDropIn(dir, binaryPath, user string) (string, error) {
-	if dir == "" {
-		dir = sshDir
+func WriteDropIn(sshConfigDir, binaryPath, user, stateDir, socket string) (string, error) {
+	if sshConfigDir == "" {
+		sshConfigDir = sshDir
 	}
-	path := filepath.Join(dir, "sshd_config.d", dropInName)
-	if err := atomicWrite(path, []byte(dropInContent(binaryPath, user)), 0o644); err != nil {
+	path := filepath.Join(sshConfigDir, "sshd_config.d", dropInName)
+	if err := atomicWrite(path, []byte(dropInContent(binaryPath, user, stateDir, socket)), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil

@@ -13,22 +13,26 @@ const (
 	envListenAddr  = "CUSTOS_LISTEN_ADDR"
 	envMasterKey   = "CUSTOS_MASTER_KEY"
 	envHybridKey   = "CUSTOS_HYBRID_PRIVATE_KEY"
+	envEncryption  = "CUSTOS_ENCRYPTION"
+	envEmailFrom   = "CUSTOS_EMAIL_FROM"
+	envAppURL      = "CUSTOS_APP_URL"
+	envResendKey   = "RESEND_API_KEY"
 
 	defaultListenAddr = ":8080"
 	keySize           = 32
 )
 
-// Config is the control plane's runtime configuration, loaded from the
-// environment once at startup.
 type Config struct {
-	DatabaseURL      string
-	ListenAddr       string
-	MasterKey        []byte // vault master key
-	HybridPrivateKey []byte // server X25519 private key
+	DatabaseURL       string
+	ListenAddr        string
+	MasterKey         []byte
+	HybridPrivateKey  []byte
+	EncryptionEnabled bool
+	ResendAPIKey      string
+	EmailFrom         string
+	AppURL            string
 }
 
-// LoadConfig reads and validates configuration from the environment. It reports
-// every problem at once rather than one at a time.
 func LoadConfig() (Config, error) {
 	var cfg Config
 	var missing []string
@@ -52,11 +56,16 @@ func LoadConfig() (Config, error) {
 	}
 	cfg.MasterKey = masterKey
 
+	cfg.EncryptionEnabled = envEnabled(envEncryption, true)
+	cfg.ResendAPIKey = os.Getenv(envResendKey)
+	cfg.EmailFrom = os.Getenv(envEmailFrom)
+	cfg.AppURL = os.Getenv(envAppURL)
+
 	hybridKey, err := decodeKey(envHybridKey)
 	if err != nil {
 		return Config{}, err
 	}
-	if hybridKey == nil {
+	if cfg.EncryptionEnabled && hybridKey == nil {
 		missing = append(missing, envHybridKey)
 	}
 	cfg.HybridPrivateKey = hybridKey
@@ -82,4 +91,15 @@ func decodeKey(env string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: must decode to %d bytes, got %d", env, keySize, len(key))
 	}
 	return key, nil
+}
+
+func envEnabled(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "":
+		return def
+	case "0", "false", "off", "no":
+		return false
+	default:
+		return true
+	}
 }
