@@ -65,6 +65,9 @@ type Identity struct {
 	PasswordHash pgtype.Text
 	CreatedAt    pgtype.Timestamptz
 	LastLoginAt  pgtype.Timestamptz
+	FailedLogins int32
+	LastFailedAt pgtype.Timestamptz
+	LockedUntil  pgtype.Timestamptz
 }
 
 type Invitation struct {

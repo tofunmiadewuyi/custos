@@ -12,3 +12,10 @@ update identities set last_login_at = now() where id = $1;
 -- name: UpdatePasswordIdentity :exec
 update identities set password_hash = $2
 where user_id = $1 and provider = 'password';
+
+-- name: SetLoginFailure :exec
+update identities set failed_logins = $2, locked_until = $3, last_failed_at = now()
+where id = $1;
+
+-- name: ResetLoginFailures :exec
+update identities set failed_logins = 0, locked_until = null where id = $1;

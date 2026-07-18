@@ -16,9 +16,16 @@ import (
 const (
 	accessTTL  = 15 * time.Minute
 	refreshTTL = 30 * 24 * time.Hour
+
+	maxLoginFailures = 5
+	loginWindow      = 15 * time.Minute // failures must accumulate within this to lock
+	lockDuration     = 15 * time.Minute
 )
 
-var errBadCredentials = errors.New("invalid credentials")
+var (
+	errBadCredentials = errors.New("invalid credentials")
+	errTooManyAttempts = errors.New("too many failed login attempts")
+)
 
 // dummyHash is verified against for unknown emails so login costs the same
 // whether or not the account exists, defeating timing-based enumeration.
@@ -51,15 +58,16 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	pair, err := s.login(r.Context(), req)
-	if errors.Is(err, errBadCredentials) {
+	switch {
+	case errors.Is(err, errTooManyAttempts):
+		http.Error(w, "too many failed attempts; try again later", http.StatusTooManyRequests)
+	case errors.Is(err, errBadCredentials):
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
-		return
-	}
-	if err != nil {
+	case err != nil:
 		serverError(w, "login failed", err)
-		return
+	default:
+		s.writeResponse(w, req.ClientPublicKey, pair)
 	}
-	s.writeResponse(w, req.ClientPublicKey, pair)
 }
 
 func (s *Server) login(ctx context.Context, req loginRequest) (tokenPair, error) {
@@ -71,14 +79,19 @@ func (s *Server) login(ctx context.Context, req loginRequest) (tokenPair, error)
 	if err != nil {
 		return tokenPair{}, err
 	}
+	if id.LockedUntil.Valid && id.LockedUntil.Time.After(time.Now()) {
+		return tokenPair{}, errTooManyAttempts
+	}
 	if !id.PasswordHash.Valid {
 		password.Verify(dummyHash, req.Password)
 		return tokenPair{}, errBadCredentials
 	}
 	ok, err := password.Verify(id.PasswordHash.String, req.Password)
 	if err != nil || !ok {
+		s.recordFailedLogin(ctx, id)
 		return tokenPair{}, errBadCredentials
 	}
+	s.q.ResetLoginFailures(ctx, id.ID)
 
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -111,6 +124,22 @@ func (s *Server) login(ctx context.Context, req loginRequest) (tokenPair, error)
 		return tokenPair{}, err
 	}
 	return tokenPair{AccessToken: rawAccess, RefreshToken: rawRefresh}, nil
+}
+
+// recordFailedLogin bumps the identity's failure count within the window and
+// locks the account once it crosses the threshold. Auto-clears when the lock
+// window passes, or on the next successful login.
+func (s *Server) recordFailedLogin(ctx context.Context, id db.Identity) {
+	count := id.FailedLogins + 1
+	if id.LastFailedAt.Valid && time.Since(id.LastFailedAt.Time) > loginWindow {
+		count = 1 // window elapsed, start a fresh streak
+	}
+	var lockedUntil pgtype.Timestamptz
+	if count >= maxLoginFailures {
+		lockedUntil = pgtype.Timestamptz{Time: time.Now().Add(lockDuration), Valid: true}
+		count = 0
+	}
+	s.q.SetLoginFailure(ctx, db.SetLoginFailureParams{ID: id.ID, FailedLogins: count, LockedUntil: lockedUntil})
 }
 
 type refreshRequest struct {

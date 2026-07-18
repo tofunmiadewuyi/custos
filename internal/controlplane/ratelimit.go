@@ -66,18 +66,21 @@ func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP prefers the proxy-forwarded address, falling back to the direct peer.
-// We trust the forwarded headers because the control plane sits behind our own
-// proxy/tunnel; a direct-to-origin deployment should not.
+// clientIP resolves the real client address from trusted proxy headers, with fallbacks.
+// Cloudflare's CF-Connecting-IP and Traefik's X-Real-IP are set authoritatively by the proxy;
+// leftmost X-Forwarded-For is a last resort.
 func clientIP(r *http.Request) string {
+	if cf := r.Header.Get("CF-Connecting-IP"); cf != "" {
+		return cf
+	}
+	if xr := r.Header.Get("X-Real-IP"); xr != "" {
+		return xr
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		if i := strings.IndexByte(xff, ','); i >= 0 {
 			return strings.TrimSpace(xff[:i])
 		}
 		return strings.TrimSpace(xff)
-	}
-	if xr := r.Header.Get("X-Real-IP"); xr != "" {
-		return xr
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

@@ -1,61 +1,80 @@
--- custos control-plane schema.
--- UUID primary keys, timestamptz everywhere. Tables are ordered by dependency.
+-- +goose Up
+-- custos control-plane schema. UUID PKs, timestamptz throughout.
 
 create extension if not exists pgcrypto; -- gen_random_uuid()
 
 -- ── Identity & auth ─────────────────────────────────────────────────────────
 
--- The person. Decoupled from how they log in.
 create table users (
   id         uuid primary key default gen_random_uuid(),
   email      text not null unique,
   name       text not null,
   role       text not null default 'member' check (role in ('admin', 'member')),
-  status     text not null default 'active'  check (status in ('active', 'disabled')),
+  status     text not null default 'active'  check (status in ('active', 'suspended', 'removed')),
   created_at timestamptz not null default now()
 );
 
--- Login methods, one user -> many. MFA factors slot in here later as more rows.
+-- Login methods, one user -> many. failed_logins/locked_until throttle brute force.
 create table identities (
-  id            uuid primary key default gen_random_uuid(),
-  user_id       uuid not null references users(id) on delete cascade,
-  provider      text not null,          -- 'password' | 'google' | 'slack' | ...
-  external_id   text not null,          -- email for password; provider subject for oauth
-  password_hash text,                   -- argon2id; only for provider='password'
-  created_at    timestamptz not null default now(),
-  last_login_at timestamptz,
+  id             uuid primary key default gen_random_uuid(),
+  user_id        uuid not null references users(id) on delete cascade,
+  provider       text not null,          -- 'password' | 'google' | 'slack' | ...
+  external_id    text not null,          -- email for password; provider subject for oauth
+  password_hash  text,                   -- argon2id; only for provider='password'
+  created_at     timestamptz not null default now(),
+  last_login_at  timestamptz,
+  failed_logins  integer not null default 0,
+  last_failed_at timestamptz,
+  locked_until   timestamptz,
   unique (provider, external_id)
 );
 create index on identities (user_id);
 
--- Pending invites; a user and identity are created when one is accepted.
 create table invitations (
   id          uuid primary key default gen_random_uuid(),
   email       text not null,
   role        text not null default 'member' check (role in ('admin', 'member')),
-  token_hash  text not null,            -- store the hash, never the raw token
+  token_hash  text not null,
   invited_by  uuid references users(id),
   expires_at  timestamptz not null,
   accepted_at timestamptz,
   created_at  timestamptz not null default now()
 );
 
--- Web sessions. Holds the client's hybrid-encryption session public key.
+-- A login session = the refresh token, plus the client's hybrid session pubkey.
 create table sessions (
   id                uuid primary key default gen_random_uuid(),
   user_id           uuid not null references users(id) on delete cascade,
-  token_hash        text not null unique,
-  client_public_key bytea not null,     -- X25519, for encrypting responses to this client
+  token_hash        text not null unique, -- the refresh token
+  client_public_key bytea,                -- X25519; null when API encryption is off (dev)
   created_at        timestamptz not null default now(),
   expires_at        timestamptz not null,
   revoked_at        timestamptz
 );
 create index on sessions (user_id);
 
+-- Short-lived access tokens; a session mints many. Revoking the session cascades them.
+create table access_tokens (
+  id         uuid primary key default gen_random_uuid(),
+  session_id uuid not null references sessions(id) on delete cascade,
+  token_hash text not null unique,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now()
+);
+create index on access_tokens (session_id);
+
+create table password_resets (
+  id         uuid primary key default gen_random_uuid(),
+  user_id    uuid not null references users(id) on delete cascade,
+  token_hash text not null unique,
+  expires_at timestamptz not null,
+  used_at    timestamptz,
+  created_at timestamptz not null default now()
+);
+
 -- ── SSH access ──────────────────────────────────────────────────────────────
 
--- A user's registered SSH keys. Fingerprint is unique system-wide: a key
--- identifies exactly one person.
+-- A user's registered SSH keys. Fingerprint unique system-wide: a key = one person.
 create table public_keys (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references users(id) on delete cascade,
@@ -72,8 +91,8 @@ create table hosts (
   id           uuid primary key default gen_random_uuid(),
   name         text not null,
   hostname     text not null,
-  identity_key text not null unique,     -- daemon's ed25519 public key, from enrollment
-  accounts     text[] not null default '{}', -- unix accounts custos manages on this host
+  identity_key text not null unique,          -- daemon's ed25519 public key, from enrollment
+  accounts     text[] not null default '{}',  -- unix accounts custos manages on this host
   status       text not null default 'active' check (status in ('active', 'revoked')),
   enrolled_at  timestamptz not null default now(),
   last_seen_at timestamptz
@@ -84,11 +103,11 @@ create table enrollment_tokens (
   id         uuid primary key default gen_random_uuid(),
   token_hash text not null unique,
   label      text,
-  accounts   text[] not null default '{}', -- copied to hosts.accounts on enrollment
+  accounts   text[] not null default '{}',    -- copied to hosts.accounts on enrollment
   created_by uuid references users(id),
   expires_at timestamptz not null,
   used_at    timestamptz,
-  host_id    uuid references hosts(id),  -- set when consumed
+  host_id    uuid references hosts(id),
   created_at timestamptz not null default now()
 );
 
@@ -97,7 +116,7 @@ create table enrollment_tokens (
 create table secrets (
   id          uuid primary key default gen_random_uuid(),
   name        text not null,
-  ciphertext  bytea not null,            -- vault-sealed; plaintext is never stored
+  ciphertext  bytea not null,                  -- vault-sealed; plaintext is never stored
   nonce       bytea not null,
   wrapped_key bytea not null,
   created_by  uuid references users(id),
@@ -121,20 +140,19 @@ create table group_resources (
   primary key (group_id, resource_kind, resource_id)
 );
 
--- Catalog of permission types. Seeded below, extended over time.
 create table permissions (
   key         text primary key,
   description text not null
 );
 
--- A user granted a permission, either globally or on one resource. Group
--- targets cascade to members at resolve time. Soft-revoked to keep the trail.
+-- A user granted a permission, globally or on one resource. Group targets cascade
+-- to members at resolve time. Soft-revoked to keep the trail.
 create table grants (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references users(id) on delete cascade,
   permission  text not null references permissions(key),
   target_kind text not null check (target_kind in ('secret', 'host', 'group', 'global')),
-  target_id   uuid,                      -- null iff global
+  target_id   uuid,                            -- null iff global
   granted_by  uuid references users(id),
   created_at  timestamptz not null default now(),
   revoked_at  timestamptz,
@@ -145,8 +163,8 @@ create index on grants (target_kind, target_id) where revoked_at is null;
 
 -- ── Audit ───────────────────────────────────────────────────────────────────
 
--- Full lifecycle of every secret. secret_id is nulled (not cascaded) on delete
--- and the name is denormalized, so a delete entry survives the secret it records.
+-- secret_id is nulled (not cascaded) on delete and the name is denormalized, so a
+-- delete entry survives the secret it records.
 create table secret_audit_logs (
   id          uuid primary key default gen_random_uuid(),
   secret_id   uuid references secrets(id) on delete set null,
@@ -157,15 +175,16 @@ create table secret_audit_logs (
 );
 create index on secret_audit_logs (secret_id, at);
 
--- SSH login attempts, forwarded by daemons. account is the local unix login
--- (%u); public_key_id is who the person is, resolved from the key fingerprint.
+-- SSH login attempts. fingerprint is denormalized and public_key_id nulls on
+-- delete, so history survives a removed key.
 create table ssh_access_logs (
   id            uuid primary key default gen_random_uuid(),
   host_id       uuid not null references hosts(id) on delete cascade,
-  public_key_id uuid references public_keys(id),
+  public_key_id uuid references public_keys(id) on delete set null,
   account       text not null,
   allowed       boolean not null,
-  at            timestamptz not null
+  at            timestamptz not null,
+  fingerprint   text not null default ''
 );
 create index on ssh_access_logs (host_id, at);
 
@@ -179,3 +198,22 @@ insert into permissions (key, description) values
   ('secret.delete', 'Delete secrets'),                             -- scoped
   ('host.access',   'SSH access to a host'),                       -- scoped
   ('group.manage',  'Rename, delete, or change membership of a group'); -- scoped
+
+-- +goose Down
+drop table if exists ssh_access_logs cascade;
+drop table if exists secret_audit_logs cascade;
+drop table if exists grants cascade;
+drop table if exists permissions cascade;
+drop table if exists group_resources cascade;
+drop table if exists resource_groups cascade;
+drop table if exists secrets cascade;
+drop table if exists enrollment_tokens cascade;
+drop table if exists hosts cascade;
+drop table if exists public_keys cascade;
+drop table if exists password_resets cascade;
+drop table if exists access_tokens cascade;
+drop table if exists sessions cascade;
+drop table if exists invitations cascade;
+drop table if exists identities cascade;
+drop table if exists users cascade;
+drop extension if exists pgcrypto;

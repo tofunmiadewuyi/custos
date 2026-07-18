@@ -14,7 +14,7 @@ import (
 const createIdentity = `-- name: CreateIdentity :one
 insert into identities (user_id, provider, external_id, password_hash)
 values ($1, $2, $3, $4)
-returning id, user_id, provider, external_id, password_hash, created_at, last_login_at
+returning id, user_id, provider, external_id, password_hash, created_at, last_login_at, failed_logins, last_failed_at, locked_until
 `
 
 type CreateIdentityParams struct {
@@ -40,12 +40,15 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.LastLoginAt,
+		&i.FailedLogins,
+		&i.LastFailedAt,
+		&i.LockedUntil,
 	)
 	return i, err
 }
 
 const getIdentity = `-- name: GetIdentity :one
-select id, user_id, provider, external_id, password_hash, created_at, last_login_at from identities where provider = $1 and external_id = $2
+select id, user_id, provider, external_id, password_hash, created_at, last_login_at, failed_logins, last_failed_at, locked_until from identities where provider = $1 and external_id = $2
 `
 
 type GetIdentityParams struct {
@@ -64,8 +67,36 @@ func (q *Queries) GetIdentity(ctx context.Context, arg GetIdentityParams) (Ident
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.LastLoginAt,
+		&i.FailedLogins,
+		&i.LastFailedAt,
+		&i.LockedUntil,
 	)
 	return i, err
+}
+
+const resetLoginFailures = `-- name: ResetLoginFailures :exec
+update identities set failed_logins = 0, locked_until = null where id = $1
+`
+
+func (q *Queries) ResetLoginFailures(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, resetLoginFailures, id)
+	return err
+}
+
+const setLoginFailure = `-- name: SetLoginFailure :exec
+update identities set failed_logins = $2, locked_until = $3, last_failed_at = now()
+where id = $1
+`
+
+type SetLoginFailureParams struct {
+	ID           pgtype.UUID
+	FailedLogins int32
+	LockedUntil  pgtype.Timestamptz
+}
+
+func (q *Queries) SetLoginFailure(ctx context.Context, arg SetLoginFailureParams) error {
+	_, err := q.db.Exec(ctx, setLoginFailure, arg.ID, arg.FailedLogins, arg.LockedUntil)
+	return err
 }
 
 const touchIdentityLogin = `-- name: TouchIdentityLogin :exec
