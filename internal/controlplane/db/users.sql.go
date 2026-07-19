@@ -23,24 +23,31 @@ func (q *Queries) CountActiveAdmins(ctx context.Context) (int64, error) {
 }
 
 const createUser = `-- name: CreateUser :one
-insert into users (email, name, role)
-values ($1, $2, $3)
-returning id, email, name, role, status, created_at
+insert into users (email, name, display_name, role)
+values ($1, $2, $3, $4)
+returning id, email, name, display_name, role, status, created_at
 `
 
 type CreateUserParams struct {
-	Email string
-	Name  string
-	Role  string
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
 }
 
 func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, error) {
-	row := q.db.QueryRow(ctx, createUser, arg.Email, arg.Name, arg.Role)
+	row := q.db.QueryRow(ctx, createUser,
+		arg.Email,
+		arg.Name,
+		arg.DisplayName,
+		arg.Role,
+	)
 	var i User
 	err := row.Scan(
 		&i.ID,
 		&i.Email,
 		&i.Name,
+		&i.DisplayName,
 		&i.Role,
 		&i.Status,
 		&i.CreatedAt,
@@ -58,7 +65,7 @@ func (q *Queries) DeleteUserIdentities(ctx context.Context, userID pgtype.UUID) 
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-select id, email, name, role, status, created_at from users where email = $1
+select id, email, name, display_name, role, status, created_at from users where email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -68,6 +75,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.ID,
 		&i.Email,
 		&i.Name,
+		&i.DisplayName,
 		&i.Role,
 		&i.Status,
 		&i.CreatedAt,
@@ -76,7 +84,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 }
 
 const getUserByID = `-- name: GetUserByID :one
-select id, email, name, role, status, created_at from users where id = $1
+select id, email, name, display_name, role, status, created_at from users where id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error) {
@@ -86,6 +94,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 		&i.ID,
 		&i.Email,
 		&i.Name,
+		&i.DisplayName,
 		&i.Role,
 		&i.Status,
 		&i.CreatedAt,
@@ -94,7 +103,7 @@ func (q *Queries) GetUserByID(ctx context.Context, id pgtype.UUID) (User, error)
 }
 
 const listUsers = `-- name: ListUsers :many
-select id, email, name, role, status, created_at from users order by email
+select id, email, name, display_name, role, status, created_at from users order by email
 `
 
 func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
@@ -110,6 +119,7 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 			&i.ID,
 			&i.Email,
 			&i.Name,
+			&i.DisplayName,
 			&i.Role,
 			&i.Status,
 			&i.CreatedAt,
@@ -148,6 +158,34 @@ func (q *Queries) SetUserStatus(ctx context.Context, arg SetUserStatusParams) (i
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateUserDisplayName = `-- name: UpdateUserDisplayName :exec
+update users set display_name = $2 where id = $1
+`
+
+type UpdateUserDisplayNameParams struct {
+	ID          pgtype.UUID
+	DisplayName pgtype.Text
+}
+
+func (q *Queries) UpdateUserDisplayName(ctx context.Context, arg UpdateUserDisplayNameParams) error {
+	_, err := q.db.Exec(ctx, updateUserDisplayName, arg.ID, arg.DisplayName)
+	return err
+}
+
+const updateUserName = `-- name: UpdateUserName :exec
+update users set name = $2 where id = $1
+`
+
+type UpdateUserNameParams struct {
+	ID   pgtype.UUID
+	Name string
+}
+
+func (q *Queries) UpdateUserName(ctx context.Context, arg UpdateUserNameParams) error {
+	_, err := q.db.Exec(ctx, updateUserName, arg.ID, arg.Name)
+	return err
 }
 
 const userGrantedHostIDs = `-- name: UserGrantedHostIDs :many

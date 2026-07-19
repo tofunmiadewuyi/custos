@@ -16,6 +16,7 @@ const (
 	envEncryption  = "CUSTOS_ENCRYPTION"
 	envEmailFrom   = "CUSTOS_EMAIL_FROM"
 	envAppURL      = "CUSTOS_APP_URL"
+	envCorsOrigins = "CUSTOS_CORS_ORIGINS"
 	envResendKey   = "RESEND_API_KEY"
 
 	defaultListenAddr = ":8080"
@@ -31,6 +32,7 @@ type Config struct {
 	ResendAPIKey      string
 	EmailFrom         string
 	AppURL            string
+	CorsOrigins       []string // allowed browser origins; empty → allow all (dev)
 }
 
 func LoadConfig() (Config, error) {
@@ -60,6 +62,7 @@ func LoadConfig() (Config, error) {
 	cfg.ResendAPIKey = os.Getenv(envResendKey)
 	cfg.EmailFrom = os.Getenv(envEmailFrom)
 	cfg.AppURL = os.Getenv(envAppURL)
+	cfg.CorsOrigins = splitCSV(os.Getenv(envCorsOrigins))
 
 	hybridKey, err := decodeKey(envHybridKey)
 	if err != nil {
@@ -91,6 +94,16 @@ func decodeKey(env string) ([]byte, error) {
 		return nil, fmt.Errorf("%s: must decode to %d bytes, got %d", env, keySize, len(key))
 	}
 	return key, nil
+}
+
+func splitCSV(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func envEnabled(key string, def bool) bool {

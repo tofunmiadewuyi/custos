@@ -11,6 +11,148 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const listActiveAdmins = `-- name: ListActiveAdmins :many
+select id as user_id, email, name, status from users
+where role = 'admin' and status = 'active'
+order by email
+`
+
+type ListActiveAdminsRow struct {
+	UserID pgtype.UUID
+	Email  string
+	Name   string
+	Status string
+}
+
+func (q *Queries) ListActiveAdmins(ctx context.Context) ([]ListActiveAdminsRow, error) {
+	rows, err := q.db.Query(ctx, listActiveAdmins)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveAdminsRow{}
+	for rows.Next() {
+		var i ListActiveAdminsRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.Status,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSecretDirectAccess = `-- name: ListSecretDirectAccess :many
+select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
+from grants g
+join users u on u.id = g.user_id
+where g.revoked_at is null
+  and g.target_kind = 'secret' and g.target_id = $1
+order by u.email
+`
+
+type ListSecretDirectAccessRow struct {
+	UserID     pgtype.UUID
+	Email      string
+	Name       string
+	Role       string
+	Status     string
+	Permission string
+	CreatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) ListSecretDirectAccess(ctx context.Context, secretID pgtype.UUID) ([]ListSecretDirectAccessRow, error) {
+	rows, err := q.db.Query(ctx, listSecretDirectAccess, secretID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSecretDirectAccessRow{}
+	for rows.Next() {
+		var i ListSecretDirectAccessRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.Role,
+			&i.Status,
+			&i.Permission,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSecretGroupAccess = `-- name: ListSecretGroupAccess :many
+select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at,
+       rg.id as group_id, rg.name as group_name
+from grants g
+join users u on u.id = g.user_id
+join resource_groups rg on rg.id = g.target_id
+where g.revoked_at is null
+  and g.target_kind = 'group'
+  and rg.id in (
+    select group_id from group_resources
+    where resource_kind = 'secret' and resource_id = $1
+  )
+order by rg.name, u.email
+`
+
+type ListSecretGroupAccessRow struct {
+	UserID     pgtype.UUID
+	Email      string
+	Name       string
+	Role       string
+	Status     string
+	Permission string
+	CreatedAt  pgtype.Timestamptz
+	GroupID    pgtype.UUID
+	GroupName  string
+}
+
+func (q *Queries) ListSecretGroupAccess(ctx context.Context, secretID pgtype.UUID) ([]ListSecretGroupAccessRow, error) {
+	rows, err := q.db.Query(ctx, listSecretGroupAccess, secretID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSecretGroupAccessRow{}
+	for rows.Next() {
+		var i ListSecretGroupAccessRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.Role,
+			&i.Status,
+			&i.Permission,
+			&i.CreatedAt,
+			&i.GroupID,
+			&i.GroupName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const userHasGlobalPermission = `-- name: UserHasGlobalPermission :one
 select exists (
   select 1 from grants

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
-
 )
+
+var version = "dev" // overridden at release via -ldflags -X main.version
 
 func main() {
 	if len(os.Args) < 2 {
@@ -21,6 +23,8 @@ func main() {
 		cmdRun(os.Args[2:])
 	case "status":
 		fatal("%s: not implemented yet", os.Args[1])
+	case "version", "--version", "-v":
+		fmt.Println("custosd", version)
 	default:
 		usage()
 		os.Exit(2)

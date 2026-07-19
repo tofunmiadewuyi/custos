@@ -5,13 +5,16 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
 )
 
 type meView struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
-	Name  string `json:"name"`
-	Role  string `json:"role"`
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -22,10 +25,58 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeResponse(w, auth.ClientPublicKey, meView{
-		ID:    uuidString(user.ID),
-		Email: user.Email,
-		Name:  user.Name,
-		Role:  user.Role,
+		ID:          uuidString(user.ID),
+		Email:       user.Email,
+		Name:        user.Name,
+		DisplayName: textString(user.DisplayName),
+		Role:        user.Role,
+	})
+}
+
+// updateProfileRequest is a partial update: nil fields are left unchanged. An
+// empty display_name clears it; name cannot be emptied (it's required).
+type updateProfileRequest struct {
+	Name        *string `json:"name"`
+	DisplayName *string `json:"display_name"`
+}
+
+func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	var req updateProfileRequest
+	if err := s.readRequest(r, &req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Name != nil {
+		if *req.Name == "" {
+			http.Error(w, "name cannot be empty", http.StatusBadRequest)
+			return
+		}
+		if err := s.q.UpdateUserName(r.Context(), db.UpdateUserNameParams{ID: auth.UserID, Name: *req.Name}); err != nil {
+			serverError(w, "could not update profile", err)
+			return
+		}
+	}
+	if req.DisplayName != nil {
+		if err := s.q.UpdateUserDisplayName(r.Context(), db.UpdateUserDisplayNameParams{
+			ID: auth.UserID, DisplayName: pgtype.Text{String: *req.DisplayName, Valid: *req.DisplayName != ""},
+		}); err != nil {
+			serverError(w, "could not update profile", err)
+			return
+		}
+	}
+
+	user, err := s.q.GetUserByID(r.Context(), auth.UserID)
+	if err != nil {
+		serverError(w, "could not load profile", err)
+		return
+	}
+	s.writeResponse(w, auth.ClientPublicKey, meView{
+		ID:          uuidString(user.ID),
+		Email:       user.Email,
+		Name:        user.Name,
+		DisplayName: textString(user.DisplayName),
+		Role:        user.Role,
 	})
 }
 

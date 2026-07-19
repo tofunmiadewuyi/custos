@@ -16,3 +16,30 @@ select exists (
         where resource_kind = 'secret' and resource_id = @secret_id))
     )
 );
+
+-- name: ListSecretDirectAccess :many
+select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
+from grants g
+join users u on u.id = g.user_id
+where g.revoked_at is null
+  and g.target_kind = 'secret' and g.target_id = @secret_id
+order by u.email;
+
+-- name: ListSecretGroupAccess :many
+select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at,
+       rg.id as group_id, rg.name as group_name
+from grants g
+join users u on u.id = g.user_id
+join resource_groups rg on rg.id = g.target_id
+where g.revoked_at is null
+  and g.target_kind = 'group'
+  and rg.id in (
+    select group_id from group_resources
+    where resource_kind = 'secret' and resource_id = @secret_id
+  )
+order by rg.name, u.email;
+
+-- name: ListActiveAdmins :many
+select id as user_id, email, name, status from users
+where role = 'admin' and status = 'active'
+order by email;

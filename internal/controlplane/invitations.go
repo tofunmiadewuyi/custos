@@ -93,9 +93,10 @@ func (s *Server) sendInvite(ctx context.Context, to, token string) error {
 }
 
 type acceptInvitationRequest struct {
-	Token    string `json:"token"`
-	Name     string `json:"name"`
-	Password string `json:"password"`
+	Token       string `json:"token"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	Password    string `json:"password"`
 }
 
 func (s *Server) handleAcceptInvitation(w http.ResponseWriter, r *http.Request) {
@@ -146,7 +147,12 @@ func (s *Server) acceptInvitation(ctx context.Context, req acceptInvitationReque
 	defer tx.Rollback(ctx)
 	q := db.New(tx)
 
-	user, err := q.CreateUser(ctx, db.CreateUserParams{Email: inv.Email, Name: req.Name, Role: inv.Role})
+	user, err := q.CreateUser(ctx, db.CreateUserParams{
+		Email:       inv.Email,
+		Name:        req.Name,
+		DisplayName: pgtype.Text{String: req.DisplayName, Valid: req.DisplayName != ""},
+		Role:        inv.Role,
+	})
 	if err != nil {
 		if isUniqueViolation(err) {
 			return ErrEmailTaken

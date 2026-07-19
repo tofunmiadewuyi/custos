@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -50,28 +51,35 @@ func (s *Server) handlePasswordReset(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// startPasswordReset is best-effort and silent: unknown emails and errors are
-// swallowed so the caller learns nothing about who has an account.
+// startPasswordReset is best-effort — the client always gets 204, so the outcome
+// is only visible in the server logs.
 func (s *Server) startPasswordReset(ctx context.Context, addr string) {
 	user, err := s.q.GetUserByEmail(ctx, addr)
 	if err != nil {
+		slog.Info("password reset requested for unknown email", "email", addr)
 		return
 	}
 	raw, hash, err := GenerateToken()
 	if err != nil {
+		slog.Error("password reset: token generation failed", "err", err)
 		return
 	}
 	if _, err := s.q.CreatePasswordReset(ctx, db.CreatePasswordResetParams{
 		UserID: user.ID, TokenHash: hash, ExpiresAt: expiry(resetTTL),
 	}); err != nil {
+		slog.Error("password reset: could not store token", "err", err)
 		return
 	}
 	link := fmt.Sprintf("%s/reset?token=%s", strings.TrimRight(s.cfg.AppURL, "/"), raw)
-	s.email.Send(ctx, email.Message{
+	if err := s.email.Send(ctx, email.Message{
 		To:      addr,
 		Subject: "Reset your custos password",
 		HTML:    fmt.Sprintf(`<p>Reset your custos password:</p><p><a href="%s">Choose a new password</a></p><p>This link expires in an hour.</p>`, link),
-	})
+	}); err != nil {
+		slog.Error("password reset: email send failed", "email", addr, "err", err)
+		return
+	}
+	slog.Info("password reset email sent", "email", addr)
 }
 
 type passwordResetConfirmRequest struct {

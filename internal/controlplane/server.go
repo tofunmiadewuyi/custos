@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/go-chi/cors"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"golang.org/x/time/rate"
@@ -46,6 +47,7 @@ func (s *Server) Handler() http.Handler {
 	r.Use(middleware.RequestID)
 	r.Use(requestLogger)
 	r.Use(middleware.Recoverer)
+	r.Use(s.corsMiddleware())
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	r.Get("/daemon", s.handleDaemon)
@@ -64,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(s.requireAuth)
 		r.Get("/me", s.handleMe)
+		r.Patch("/me", s.handleUpdateProfile)
 		r.Post("/logout", s.handleLogout)
 		r.Post("/keys", s.handleAddKey)
 		r.Get("/keys", s.handleListKeys)
@@ -71,6 +74,7 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/secrets", s.handleCreateSecret)
 		r.Get("/secrets", s.handleListSecrets)
 		r.Get("/secrets/{id}", s.handleGetSecret)
+		r.Get("/secrets/{id}/reveal", s.handleRevealSecret)
 		r.Get("/secrets/{id}/audit", s.handleSecretAudit)
 		r.Put("/secrets/{id}", s.handleUpdateSecret)
 		r.Delete("/secrets/{id}", s.handleDeleteSecret)
@@ -102,8 +106,23 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/grants", s.handleListGrants)
 		r.Post("/grants", s.handleCreateGrant)
 		r.Delete("/grants/{id}", s.handleRevokeGrant)
+
+		r.Get("/secrets/{id}/access-audit", s.handleSecretAccessAudit)
 	})
 	return r
+}
+
+func (s *Server) corsMiddleware() func(http.Handler) http.Handler {
+	origins := s.cfg.CorsOrigins
+	if len(origins) == 0 {
+		origins = []string{"*"}
+	}
+	return cors.Handler(cors.Options{
+		AllowedOrigins: origins,
+		AllowedMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Authorization", "Content-Type"},
+		MaxAge:         300,
+	})
 }
 
 // Serve runs the HTTP server until ctx is cancelled, then shuts down gracefully.

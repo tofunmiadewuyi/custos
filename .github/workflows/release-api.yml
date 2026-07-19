@@ -1,0 +1,40 @@
+name: Release api
+
+on:
+  push:
+    tags:
+      - "api/v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build + package
+        run: |
+          mkdir -p dist
+          VERSION=${GITHUB_REF_NAME#api/} # api/v1.2.3 -> v1.2.3
+
+          # control plane runs on servers we operate; linux-only.
+          for GOARCH in amd64 arm64; do
+            OUT="dist/custos"
+            GOOS=linux GOARCH=$GOARCH \
+              go build -trimpath -ldflags="-s -w -X main.version=$VERSION" -o "$OUT" ./cmd/api
+            tar -czf "dist/custos_${VERSION}_linux_${GOARCH}.tar.gz" -C dist custos
+            rm "$OUT"
+          done
+
+          ( cd dist && sha256sum *.tar.gz > custos_${VERSION}_checksums.txt )
+
+      - name: Create release + upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

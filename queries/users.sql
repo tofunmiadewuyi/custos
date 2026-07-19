@@ -5,15 +5,21 @@ select * from users where email = $1;
 select * from users where id = $1;
 
 -- name: CreateUser :one
-insert into users (email, name, role)
-values ($1, $2, $3)
+insert into users (email, name, display_name, role)
+values ($1, $2, $3, $4)
 returning *;
 
 -- name: CountActiveAdmins :one
 select count(*) from users where role = 'admin' and status = 'active';
 
 -- name: ListUsers :many
-select id, email, name, role, status, created_at from users order by email;
+select id, email, name, display_name, role, status, created_at from users order by email;
+
+-- name: UpdateUserName :exec
+update users set name = $2 where id = $1;
+
+-- name: UpdateUserDisplayName :exec
+update users set display_name = $2 where id = $1;
 
 -- name: SetUserStatus :execrows
 update users set status = $2 where id = $1;

@@ -6,10 +6,11 @@ create extension if not exists pgcrypto; -- gen_random_uuid()
 -- ── Identity & auth ─────────────────────────────────────────────────────────
 
 create table users (
-  id         uuid primary key default gen_random_uuid(),
-  email      text not null unique,
-  name       text not null,
-  role       text not null default 'member' check (role in ('admin', 'member')),
+  id           uuid primary key default gen_random_uuid(),
+  email        text not null unique,
+  name         text not null,
+  display_name text,                          -- optional nickname / preferred name
+  role         text not null default 'member' check (role in ('admin', 'member')),
   status     text not null default 'active'  check (status in ('active', 'suspended', 'removed')),
   created_at timestamptz not null default now()
 );
@@ -113,15 +114,21 @@ create table enrollment_tokens (
 
 -- ── Resources, groups & permissions ─────────────────────────────────────────
 
+-- A credential item: plaintext metadata plus a sealed JSON blob of the secret
+-- fields ({password?, notes?}). The blob columns are null when there are none.
 create table secrets (
-  id          uuid primary key default gen_random_uuid(),
-  name        text not null,
-  ciphertext  bytea not null,                  -- vault-sealed; plaintext is never stored
-  nonce       bytea not null,
-  wrapped_key bytea not null,
-  created_by  uuid references users(id),
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
+  id            uuid primary key default gen_random_uuid(),
+  label         text not null,
+  url           text,
+  username      text,
+  otp_recipient text,                          -- phone / email / name; metadata
+  ciphertext    bytea,                         -- vault-sealed JSON of secret fields
+  nonce         bytea,
+  wrapped_key   bytea,
+  created_by    uuid references users(id),
+  updated_by    uuid references users(id),
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
 );
 
 create table resource_groups (

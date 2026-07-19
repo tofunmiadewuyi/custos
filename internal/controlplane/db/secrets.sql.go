@@ -12,35 +12,47 @@ import (
 )
 
 const createSecret = `-- name: CreateSecret :one
-insert into secrets (name, ciphertext, nonce, wrapped_key, created_by)
-values ($1, $2, $3, $4, $5)
-returning id, name, ciphertext, nonce, wrapped_key, created_by, created_at, updated_at
+insert into secrets (label, url, username, otp_recipient, ciphertext, nonce, wrapped_key, created_by, updated_by)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+returning id, label, url, username, otp_recipient, ciphertext, nonce, wrapped_key, created_by, updated_by, created_at, updated_at
 `
 
 type CreateSecretParams struct {
-	Name       string
-	Ciphertext []byte
-	Nonce      []byte
-	WrappedKey []byte
-	CreatedBy  pgtype.UUID
+	Label        string
+	Url          pgtype.Text
+	Username     pgtype.Text
+	OtpRecipient pgtype.Text
+	Ciphertext   []byte
+	Nonce        []byte
+	WrappedKey   []byte
+	CreatedBy    pgtype.UUID
+	UpdatedBy    pgtype.UUID
 }
 
 func (q *Queries) CreateSecret(ctx context.Context, arg CreateSecretParams) (Secret, error) {
 	row := q.db.QueryRow(ctx, createSecret,
-		arg.Name,
+		arg.Label,
+		arg.Url,
+		arg.Username,
+		arg.OtpRecipient,
 		arg.Ciphertext,
 		arg.Nonce,
 		arg.WrappedKey,
 		arg.CreatedBy,
+		arg.UpdatedBy,
 	)
 	var i Secret
 	err := row.Scan(
 		&i.ID,
-		&i.Name,
+		&i.Label,
+		&i.Url,
+		&i.Username,
+		&i.OtpRecipient,
 		&i.Ciphertext,
 		&i.Nonce,
 		&i.WrappedKey,
 		&i.CreatedBy,
+		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -57,21 +69,58 @@ func (q *Queries) DeleteSecret(ctx context.Context, id pgtype.UUID) error {
 }
 
 const getSecret = `-- name: GetSecret :one
-select id, name, ciphertext, nonce, wrapped_key, created_by, created_at, updated_at from secrets where id = $1
+select s.id, s.label, s.url, s.username, s.otp_recipient, s.ciphertext, s.nonce, s.wrapped_key, s.created_by, s.updated_by, s.created_at, s.updated_at,
+       cu.name as created_by_name, cu.display_name as created_by_display_name, cu.email as created_by_email,
+       uu.name as updated_by_name, uu.display_name as updated_by_display_name, uu.email as updated_by_email
+from secrets s
+left join users cu on cu.id = s.created_by
+left join users uu on uu.id = s.updated_by
+where s.id = $1
 `
 
-func (q *Queries) GetSecret(ctx context.Context, id pgtype.UUID) (Secret, error) {
+type GetSecretRow struct {
+	ID                   pgtype.UUID
+	Label                string
+	Url                  pgtype.Text
+	Username             pgtype.Text
+	OtpRecipient         pgtype.Text
+	Ciphertext           []byte
+	Nonce                []byte
+	WrappedKey           []byte
+	CreatedBy            pgtype.UUID
+	UpdatedBy            pgtype.UUID
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	CreatedByName        pgtype.Text
+	CreatedByDisplayName pgtype.Text
+	CreatedByEmail       pgtype.Text
+	UpdatedByName        pgtype.Text
+	UpdatedByDisplayName pgtype.Text
+	UpdatedByEmail       pgtype.Text
+}
+
+func (q *Queries) GetSecret(ctx context.Context, id pgtype.UUID) (GetSecretRow, error) {
 	row := q.db.QueryRow(ctx, getSecret, id)
-	var i Secret
+	var i GetSecretRow
 	err := row.Scan(
 		&i.ID,
-		&i.Name,
+		&i.Label,
+		&i.Url,
+		&i.Username,
+		&i.OtpRecipient,
 		&i.Ciphertext,
 		&i.Nonce,
 		&i.WrappedKey,
 		&i.CreatedBy,
+		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.CreatedByName,
+		&i.CreatedByDisplayName,
+		&i.CreatedByEmail,
+		&i.UpdatedByName,
+		&i.UpdatedByDisplayName,
+		&i.UpdatedByEmail,
 	)
 	return i, err
 }
@@ -145,14 +194,31 @@ func (q *Queries) ListAllSecretAudit(ctx context.Context, limit int32) ([]ListAl
 }
 
 const listAllSecrets = `-- name: ListAllSecrets :many
-select id, name, created_at, updated_at from secrets order by name
+select s.id, s.label, s.url, s.username, s.otp_recipient, s.created_at, s.updated_at,
+       s.created_by, cu.name as created_by_name, cu.display_name as created_by_display_name, cu.email as created_by_email,
+       s.updated_by, uu.name as updated_by_name, uu.display_name as updated_by_display_name, uu.email as updated_by_email
+from secrets s
+left join users cu on cu.id = s.created_by
+left join users uu on uu.id = s.updated_by
+order by s.label
 `
 
 type ListAllSecretsRow struct {
-	ID        pgtype.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID                   pgtype.UUID
+	Label                string
+	Url                  pgtype.Text
+	Username             pgtype.Text
+	OtpRecipient         pgtype.Text
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	CreatedBy            pgtype.UUID
+	CreatedByName        pgtype.Text
+	CreatedByDisplayName pgtype.Text
+	CreatedByEmail       pgtype.Text
+	UpdatedBy            pgtype.UUID
+	UpdatedByName        pgtype.Text
+	UpdatedByDisplayName pgtype.Text
+	UpdatedByEmail       pgtype.Text
 }
 
 func (q *Queries) ListAllSecrets(ctx context.Context) ([]ListAllSecretsRow, error) {
@@ -166,9 +232,20 @@ func (q *Queries) ListAllSecrets(ctx context.Context) ([]ListAllSecretsRow, erro
 		var i ListAllSecretsRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Name,
+			&i.Label,
+			&i.Url,
+			&i.Username,
+			&i.OtpRecipient,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CreatedBy,
+			&i.CreatedByName,
+			&i.CreatedByDisplayName,
+			&i.CreatedByEmail,
+			&i.UpdatedBy,
+			&i.UpdatedByName,
+			&i.UpdatedByDisplayName,
+			&i.UpdatedByEmail,
 		); err != nil {
 			return nil, err
 		}
@@ -181,24 +258,38 @@ func (q *Queries) ListAllSecrets(ctx context.Context) ([]ListAllSecretsRow, erro
 }
 
 const listReadableSecrets = `-- name: ListReadableSecrets :many
-select distinct s.id, s.name, s.created_at, s.updated_at
+select distinct s.id, s.label, s.url, s.username, s.otp_recipient, s.created_at, s.updated_at,
+       s.created_by, cu.name as created_by_name, cu.display_name as created_by_display_name, cu.email as created_by_email,
+       s.updated_by, uu.name as updated_by_name, uu.display_name as updated_by_display_name, uu.email as updated_by_email
 from secrets s
 join grants g on g.permission = 'secret.read' and g.revoked_at is null
   and (
     (g.target_kind = 'secret' and g.target_id = s.id)
     or (g.target_kind = 'group' and g.target_id in (
-      select group_id from group_resources
-      where resource_kind = 'secret' and resource_id = s.id))
+      select group_id from group_resources where resource_kind = 'secret' and resource_id = s.id))
   )
+left join users cu on cu.id = s.created_by
+left join users uu on uu.id = s.updated_by
 where g.user_id = $1
-order by s.name
+order by s.label
 `
 
 type ListReadableSecretsRow struct {
-	ID        pgtype.UUID
-	Name      string
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	ID                   pgtype.UUID
+	Label                string
+	Url                  pgtype.Text
+	Username             pgtype.Text
+	OtpRecipient         pgtype.Text
+	CreatedAt            pgtype.Timestamptz
+	UpdatedAt            pgtype.Timestamptz
+	CreatedBy            pgtype.UUID
+	CreatedByName        pgtype.Text
+	CreatedByDisplayName pgtype.Text
+	CreatedByEmail       pgtype.Text
+	UpdatedBy            pgtype.UUID
+	UpdatedByName        pgtype.Text
+	UpdatedByDisplayName pgtype.Text
+	UpdatedByEmail       pgtype.Text
 }
 
 func (q *Queries) ListReadableSecrets(ctx context.Context, userID pgtype.UUID) ([]ListReadableSecretsRow, error) {
@@ -212,9 +303,20 @@ func (q *Queries) ListReadableSecrets(ctx context.Context, userID pgtype.UUID) (
 		var i ListReadableSecretsRow
 		if err := rows.Scan(
 			&i.ID,
-			&i.Name,
+			&i.Label,
+			&i.Url,
+			&i.Username,
+			&i.OtpRecipient,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.CreatedBy,
+			&i.CreatedByName,
+			&i.CreatedByDisplayName,
+			&i.CreatedByEmail,
+			&i.UpdatedBy,
+			&i.UpdatedByName,
+			&i.UpdatedByDisplayName,
+			&i.UpdatedByEmail,
 		); err != nil {
 			return nil, err
 		}
@@ -273,33 +375,48 @@ func (q *Queries) ListSecretAudit(ctx context.Context, secretID pgtype.UUID) ([]
 }
 
 const updateSecret = `-- name: UpdateSecret :one
-update secrets set ciphertext = $2, nonce = $3, wrapped_key = $4, updated_at = now()
+update secrets set label = $2, url = $3, username = $4, otp_recipient = $5,
+  ciphertext = $6, nonce = $7, wrapped_key = $8, updated_by = $9, updated_at = now()
 where id = $1
-returning id, name, ciphertext, nonce, wrapped_key, created_by, created_at, updated_at
+returning id, label, url, username, otp_recipient, ciphertext, nonce, wrapped_key, created_by, updated_by, created_at, updated_at
 `
 
 type UpdateSecretParams struct {
-	ID         pgtype.UUID
-	Ciphertext []byte
-	Nonce      []byte
-	WrappedKey []byte
+	ID           pgtype.UUID
+	Label        string
+	Url          pgtype.Text
+	Username     pgtype.Text
+	OtpRecipient pgtype.Text
+	Ciphertext   []byte
+	Nonce        []byte
+	WrappedKey   []byte
+	UpdatedBy    pgtype.UUID
 }
 
 func (q *Queries) UpdateSecret(ctx context.Context, arg UpdateSecretParams) (Secret, error) {
 	row := q.db.QueryRow(ctx, updateSecret,
 		arg.ID,
+		arg.Label,
+		arg.Url,
+		arg.Username,
+		arg.OtpRecipient,
 		arg.Ciphertext,
 		arg.Nonce,
 		arg.WrappedKey,
+		arg.UpdatedBy,
 	)
 	var i Secret
 	err := row.Scan(
 		&i.ID,
-		&i.Name,
+		&i.Label,
+		&i.Url,
+		&i.Username,
+		&i.OtpRecipient,
 		&i.Ciphertext,
 		&i.Nonce,
 		&i.WrappedKey,
 		&i.CreatedBy,
+		&i.UpdatedBy,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

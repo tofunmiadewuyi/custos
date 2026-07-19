@@ -5,12 +5,16 @@ import (
 	"os"
 )
 
+var version = "dev" // overridden at release via -ldflags -X main.version
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
 	}
 	switch os.Args[1] {
+	case "version", "--version", "-v":
+		fmt.Println("custos", version)
 	case "migrate":
 		cmdMigrate(os.Args[2:])
 	case "gen-keys":
@@ -26,7 +30,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: custos <serve|migrate|create-admin|gen-keys> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: custos <serve|migrate|create-admin|gen-keys|version> [flags]")
 }
 
 func fatal(format string, args ...any) {

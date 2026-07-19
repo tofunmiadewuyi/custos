@@ -12,12 +12,13 @@ import (
 )
 
 type userView struct {
-	ID        string    `json:"id"`
-	Email     string    `json:"email"`
-	Name      string    `json:"name"`
-	Role      string    `json:"role"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	Email       string    `json:"email"`
+	Name        string    `json:"name"`
+	DisplayName string    `json:"display_name"`
+	Role        string    `json:"role"`
+	Status      string    `json:"status"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
@@ -28,7 +29,7 @@ func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	views := make([]userView, 0, len(rows))
 	for _, u := range rows {
-		views = append(views, userView{uuidString(u.ID), u.Email, u.Name, u.Role, u.Status, u.CreatedAt.Time})
+		views = append(views, userView{uuidString(u.ID), u.Email, u.Name, textString(u.DisplayName), u.Role, u.Status, u.CreatedAt.Time})
 	}
 	s.writeResponse(w, authFrom(r.Context()).ClientPublicKey, views)
 }

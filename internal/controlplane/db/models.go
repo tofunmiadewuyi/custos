@@ -113,14 +113,18 @@ type ResourceGroup struct {
 }
 
 type Secret struct {
-	ID         pgtype.UUID
-	Name       string
-	Ciphertext []byte
-	Nonce      []byte
-	WrappedKey []byte
-	CreatedBy  pgtype.UUID
-	CreatedAt  pgtype.Timestamptz
-	UpdatedAt  pgtype.Timestamptz
+	ID           pgtype.UUID
+	Label        string
+	Url          pgtype.Text
+	Username     pgtype.Text
+	OtpRecipient pgtype.Text
+	Ciphertext   []byte
+	Nonce        []byte
+	WrappedKey   []byte
+	CreatedBy    pgtype.UUID
+	UpdatedBy    pgtype.UUID
+	CreatedAt    pgtype.Timestamptz
+	UpdatedAt    pgtype.Timestamptz
 }
 
 type SecretAuditLog struct {
@@ -153,10 +157,11 @@ type SshAccessLog struct {
 }
 
 type User struct {
-	ID        pgtype.UUID
-	Email     string
-	Name      string
-	Role      string
-	Status    string
-	CreatedAt pgtype.Timestamptz
+	ID          pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
+	Status      string
+	CreatedAt   pgtype.Timestamptz
 }
