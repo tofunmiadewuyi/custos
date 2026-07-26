@@ -19,3 +19,15 @@ from grants g
 join users u on u.id = g.user_id
 where g.revoked_at is null
 order by g.created_at desc;
+
+-- name: InsertGrantAudit :exec
+insert into grant_audit_logs
+  (action, grant_id, actor_id, actor_email, subject_id, subject_email, permission, target_kind, target_id)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+
+-- name: ListGrantAudit :many
+select id, action, grant_id, actor_id, actor_email, subject_id, subject_email,
+       permission, target_kind, target_id, at
+from grant_audit_logs
+order by at desc
+limit 100;

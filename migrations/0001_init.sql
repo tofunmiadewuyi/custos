@@ -95,9 +95,15 @@ create table hosts (
   identity_key text not null unique,          -- daemon's ed25519 public key, from enrollment
   accounts     text[] not null default '{}',  -- unix accounts custos manages on this host
   status       text not null default 'active' check (status in ('active', 'revoked')),
+  machine_id   text,                          -- app-specific hash of /etc/machine-id; identifies re-enrolls
+  last_seq     bigint not null default 0,     -- monotonic per-host counter for signed snapshots (anti-replay)
   enrolled_at  timestamptz not null default now(),
   last_seen_at timestamptz
 );
+-- Only an active host holds its machine_id; a revoked one frees it to re-enroll.
+create unique index hosts_machine_id_active
+  on hosts (machine_id)
+  where status = 'active' and machine_id is not null;
 
 -- Single-use enrollment tokens an admin generates for a new daemon.
 create table enrollment_tokens (
@@ -168,32 +174,74 @@ create table grants (
 create index on grants (user_id) where revoked_at is null;
 create index on grants (target_kind, target_id) where revoked_at is null;
 
--- ── Audit ───────────────────────────────────────────────────────────────────
+-- ── Audit (append-only) ─────────────────────────────────────────────────────
+-- Audit tables carry NO foreign keys: an FK is a mutation path (cascade wipes,
+-- set-null rewrites). Ids are frozen historical refs; reads LEFT JOIN and tolerate
+-- a missing parent. Denormalized columns keep each row self-contained. Triggers
+-- below reject every update/delete/truncate.
 
--- secret_id is nulled (not cascaded) on delete and the name is denormalized, so a
--- delete entry survives the secret it records.
 create table secret_audit_logs (
   id          uuid primary key default gen_random_uuid(),
-  secret_id   uuid references secrets(id) on delete set null,
-  secret_name text not null,
+  secret_id   uuid,                            -- historical ref, no FK
+  secret_name text not null,                   -- denormalized: survives the secret
   action      text not null check (action in ('read', 'add', 'update', 'delete')),
-  user_id     uuid references users(id) on delete set null,
+  user_id     uuid,                            -- historical ref, no FK
   at          timestamptz not null default now()
 );
 create index on secret_audit_logs (secret_id, at);
 
--- SSH login attempts. fingerprint is denormalized and public_key_id nulls on
--- delete, so history survives a removed key.
 create table ssh_access_logs (
   id            uuid primary key default gen_random_uuid(),
-  host_id       uuid not null references hosts(id) on delete cascade,
-  public_key_id uuid references public_keys(id) on delete set null,
+  host_id       uuid not null,                 -- historical ref, no FK
+  hostname      text not null default '',      -- denormalized: survives the host
+  public_key_id uuid,                           -- historical ref, no FK
   account       text not null,
   allowed       boolean not null,
   at            timestamptz not null,
-  fingerprint   text not null default ''
+  fingerprint   text not null default ''       -- denormalized: survives the key
 );
 create index on ssh_access_logs (host_id, at);
+
+-- Immutable trail of every access grant/revoke: who did it, to whom, on what.
+create table grant_audit_logs (
+  id            uuid primary key default gen_random_uuid(),
+  action        text not null check (action in ('grant', 'revoke')),
+  grant_id      uuid,                          -- the affected grant (historical)
+  actor_id      uuid,                          -- admin who performed it
+  actor_email   text not null default '',
+  subject_id    uuid,                          -- user whose access changed
+  subject_email text not null default '',
+  permission    text not null,
+  target_kind   text not null,
+  target_id     uuid,                          -- null for global grants
+  at            timestamptz not null default now()
+);
+create index on grant_audit_logs (subject_id, at);
+create index on grant_audit_logs (grant_id, at);
+
+-- +goose StatementBegin
+create or replace function reject_audit_mutation() returns trigger
+language plpgsql as $$
+begin
+  raise exception 'audit log %.% is append-only; % denied', TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_OP;
+end;
+$$;
+-- +goose StatementEnd
+
+create trigger no_mutate before update or delete on secret_audit_logs
+  for each row execute function reject_audit_mutation();
+create trigger no_truncate before truncate on secret_audit_logs
+  execute function reject_audit_mutation();
+
+create trigger no_mutate before update or delete on ssh_access_logs
+  for each row execute function reject_audit_mutation();
+create trigger no_truncate before truncate on ssh_access_logs
+  execute function reject_audit_mutation();
+
+create trigger no_mutate before update or delete on grant_audit_logs
+  for each row execute function reject_audit_mutation();
+create trigger no_truncate before truncate on grant_audit_logs
+  execute function reject_audit_mutation();
 
 -- ── Seed data ───────────────────────────────────────────────────────────────
 
@@ -207,8 +255,10 @@ insert into permissions (key, description) values
   ('group.manage',  'Rename, delete, or change membership of a group'); -- scoped
 
 -- +goose Down
+drop table if exists grant_audit_logs cascade;
 drop table if exists ssh_access_logs cascade;
 drop table if exists secret_audit_logs cascade;
+drop function if exists reject_audit_mutation();
 drop table if exists grants cascade;
 drop table if exists permissions cascade;
 drop table if exists group_resources cascade;

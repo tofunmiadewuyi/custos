@@ -2,5 +2,5 @@
 select * from public_keys where fingerprint = $1;
 
 -- name: InsertSSHAccessLog :exec
-insert into ssh_access_logs (host_id, public_key_id, account, allowed, at, fingerprint)
-values ($1, $2, $3, $4, $5, $6);
+insert into ssh_access_logs (host_id, hostname, public_key_id, account, allowed, at, fingerprint)
+values ($1, $2, $3, $4, $5, $6, $7);

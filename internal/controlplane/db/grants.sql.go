@@ -72,6 +72,79 @@ func (q *Queries) GroupHostIDs(ctx context.Context, groupID pgtype.UUID) ([]pgty
 	return items, nil
 }
 
+const insertGrantAudit = `-- name: InsertGrantAudit :exec
+insert into grant_audit_logs
+  (action, grant_id, actor_id, actor_email, subject_id, subject_email, permission, target_kind, target_id)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+`
+
+type InsertGrantAuditParams struct {
+	Action       string
+	GrantID      pgtype.UUID
+	ActorID      pgtype.UUID
+	ActorEmail   string
+	SubjectID    pgtype.UUID
+	SubjectEmail string
+	Permission   string
+	TargetKind   string
+	TargetID     pgtype.UUID
+}
+
+func (q *Queries) InsertGrantAudit(ctx context.Context, arg InsertGrantAuditParams) error {
+	_, err := q.db.Exec(ctx, insertGrantAudit,
+		arg.Action,
+		arg.GrantID,
+		arg.ActorID,
+		arg.ActorEmail,
+		arg.SubjectID,
+		arg.SubjectEmail,
+		arg.Permission,
+		arg.TargetKind,
+		arg.TargetID,
+	)
+	return err
+}
+
+const listGrantAudit = `-- name: ListGrantAudit :many
+select id, action, grant_id, actor_id, actor_email, subject_id, subject_email,
+       permission, target_kind, target_id, at
+from grant_audit_logs
+order by at desc
+limit 100
+`
+
+func (q *Queries) ListGrantAudit(ctx context.Context) ([]GrantAuditLog, error) {
+	rows, err := q.db.Query(ctx, listGrantAudit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GrantAuditLog{}
+	for rows.Next() {
+		var i GrantAuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.Action,
+			&i.GrantID,
+			&i.ActorID,
+			&i.ActorEmail,
+			&i.SubjectID,
+			&i.SubjectEmail,
+			&i.Permission,
+			&i.TargetKind,
+			&i.TargetID,
+			&i.At,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGrants = `-- name: ListGrants :many
 select g.id, g.permission, g.target_kind, g.target_id, g.created_at,
        u.id as user_id, u.email as user_email

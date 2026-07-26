@@ -39,6 +39,20 @@ type Grant struct {
 	RevokedAt  pgtype.Timestamptz
 }
 
+type GrantAuditLog struct {
+	ID           pgtype.UUID
+	Action       string
+	GrantID      pgtype.UUID
+	ActorID      pgtype.UUID
+	ActorEmail   string
+	SubjectID    pgtype.UUID
+	SubjectEmail string
+	Permission   string
+	TargetKind   string
+	TargetID     pgtype.UUID
+	At           pgtype.Timestamptz
+}
+
 type GroupResource struct {
 	GroupID      pgtype.UUID
 	ResourceKind string
@@ -53,6 +67,8 @@ type Host struct {
 	IdentityKey string
 	Accounts    []string
 	Status      string
+	MachineID   pgtype.Text
+	LastSeq     int64
 	EnrolledAt  pgtype.Timestamptz
 	LastSeenAt  pgtype.Timestamptz
 }
@@ -149,6 +165,7 @@ type Session struct {
 type SshAccessLog struct {
 	ID          pgtype.UUID
 	HostID      pgtype.UUID
+	Hostname    string
 	PublicKeyID pgtype.UUID
 	Account     string
 	Allowed     bool
