@@ -12,7 +12,8 @@ const (
 	envDatabaseURL = "CUSTOS_DATABASE_URL"
 	envListenAddr  = "CUSTOS_LISTEN_ADDR"
 	envMasterKey   = "CUSTOS_MASTER_KEY"
-	envHybridKey   = "CUSTOS_HYBRID_PRIVATE_KEY"
+	envSigningKey  = "CUSTOS_SIGNING_PRIVATE_KEY"
+	envClientKey   = "CUSTOS_CLIENT_PRIVATE_KEY"
 	envEncryption  = "CUSTOS_ENCRYPTION"
 	envEmailFrom   = "CUSTOS_EMAIL_FROM"
 	envAppURL      = "CUSTOS_APP_URL"
@@ -27,6 +28,7 @@ type Config struct {
 	DatabaseURL       string
 	ListenAddr        string
 	MasterKey         []byte
+	SigningKey        string
 	HybridPrivateKey  []byte
 	EncryptionEnabled bool
 	ResendAPIKey      string
@@ -58,20 +60,25 @@ func LoadConfig() (Config, error) {
 	}
 	cfg.MasterKey = masterKey
 
+	cfg.SigningKey = os.Getenv(envSigningKey)
+	if cfg.SigningKey == "" {
+		missing = append(missing, envSigningKey)
+	}
+
 	cfg.EncryptionEnabled = envEnabled(envEncryption, true)
 	cfg.ResendAPIKey = os.Getenv(envResendKey)
 	cfg.EmailFrom = os.Getenv(envEmailFrom)
 	cfg.AppURL = os.Getenv(envAppURL)
 	cfg.CorsOrigins = splitCSV(os.Getenv(envCorsOrigins))
 
-	hybridKey, err := decodeKey(envHybridKey)
+	clientKey, err := decodeKey(envClientKey)
 	if err != nil {
 		return Config{}, err
 	}
-	if cfg.EncryptionEnabled && hybridKey == nil {
-		missing = append(missing, envHybridKey)
+	if cfg.EncryptionEnabled && clientKey == nil {
+		missing = append(missing, envClientKey)
 	}
-	cfg.HybridPrivateKey = hybridKey
+	cfg.HybridPrivateKey = clientKey
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env vars: %s", strings.Join(missing, ", "))

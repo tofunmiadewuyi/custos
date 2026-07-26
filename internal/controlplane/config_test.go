@@ -10,7 +10,8 @@ func setValidKeys(t *testing.T) {
 	t.Helper()
 	key := base64.StdEncoding.EncodeToString(make([]byte, keySize))
 	t.Setenv(envMasterKey, key)
-	t.Setenv(envHybridKey, key)
+	t.Setenv(envClientKey, key)
+	t.Setenv(envSigningKey, base64.StdEncoding.EncodeToString(make([]byte, 64)))
 }
 
 func TestLoadConfigDefaults(t *testing.T) {
@@ -32,13 +33,14 @@ func TestLoadConfigDefaults(t *testing.T) {
 func TestLoadConfigReportsAllMissing(t *testing.T) {
 	t.Setenv(envDatabaseURL, "")
 	t.Setenv(envMasterKey, "")
-	t.Setenv(envHybridKey, "")
+	t.Setenv(envSigningKey, "")
+	t.Setenv(envClientKey, "")
 
 	_, err := LoadConfig()
 	if err == nil {
 		t.Fatal("expected error when required vars are missing")
 	}
-	for _, want := range []string{envDatabaseURL, envMasterKey, envHybridKey} {
+	for _, want := range []string{envDatabaseURL, envMasterKey, envSigningKey, envClientKey} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error should mention %s, got: %v", want, err)
 		}
@@ -47,7 +49,8 @@ func TestLoadConfigReportsAllMissing(t *testing.T) {
 
 func TestLoadConfigRejectsBadKey(t *testing.T) {
 	t.Setenv(envDatabaseURL, "postgres://localhost/custos")
-	t.Setenv(envHybridKey, base64.StdEncoding.EncodeToString(make([]byte, keySize)))
+	t.Setenv(envClientKey, base64.StdEncoding.EncodeToString(make([]byte, keySize)))
+	t.Setenv(envSigningKey, base64.StdEncoding.EncodeToString(make([]byte, 64)))
 
 	t.Setenv(envMasterKey, "not-base64!!!")
 	if _, err := LoadConfig(); err == nil {

@@ -4,6 +4,7 @@
 package protocol
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"time"
 )
@@ -16,10 +17,12 @@ type EnrollRequest struct {
 	Token     string `json:"token"` // admin-issued, single-use
 	Hostname  string `json:"hostname"`
 	PublicKey string `json:"public_key"` // daemon identity, base64
+	MachineID string `json:"machine_id"` // app-specific hash of /etc/machine-id; empty if unavailable
 }
 
 type EnrollResponse struct {
-	HostID string `json:"host_id"`
+	HostID           string `json:"host_id"`
+	SigningPublicKey string `json:"signing_public_key"` // control plane's ed25519 snapshot-signing key, base64
 }
 
 // MessageType tags an Envelope so the receiver knows how to decode Data.
@@ -39,11 +42,12 @@ const (
 	TypePong      MessageType = "pong"
 )
 
-// Envelope is the frame for every websocket message. Data holds the encoded
-// payload for Type, or is empty for messages that carry none (ping/pong).
+// Envelope is the frame for every websocket message. Data is empty for ping/pong.
 type Envelope struct {
 	Type MessageType     `json:"type"`
 	Data json.RawMessage `json:"data,omitempty"`
+	Seq  uint64          `json:"seq,omitempty"` // monotonic per-host; anti-replay
+	Sig  []byte          `json:"sig,omitempty"` // ed25519 over SnapshotSigningInput
 }
 
 func NewEnvelope(t MessageType, payload any) (Envelope, error) {
@@ -55,6 +59,22 @@ func NewEnvelope(t MessageType, payload any) (Envelope, error) {
 		return Envelope{}, err
 	}
 	return Envelope{Type: t, Data: data}, nil
+}
+
+const snapshotSigTag = "custos-snapshot:v1" // domain separation; other signed types get their own tag
+
+// SnapshotSigningInput builds the signed bytes: tag ‖ len16(hostID) ‖ hostID ‖ seq(8 BE) ‖ data.
+func SnapshotSigningInput(hostID string, seq uint64, data []byte) []byte {
+	buf := make([]byte, 0, len(snapshotSigTag)+2+len(hostID)+8+len(data))
+	buf = append(buf, snapshotSigTag...)
+	var n [8]byte
+	binary.BigEndian.PutUint16(n[:2], uint16(len(hostID)))
+	buf = append(buf, n[:2]...)
+	buf = append(buf, hostID...)
+	binary.BigEndian.PutUint64(n[:], seq)
+	buf = append(buf, n[:]...)
+	buf = append(buf, data...)
+	return buf
 }
 
 // Challenge is sent by the control plane when a daemon connects. The daemon

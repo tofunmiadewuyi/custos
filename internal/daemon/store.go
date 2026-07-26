@@ -20,8 +20,9 @@ const (
 
 // Config is the daemon's persisted settings, written at enrollment.
 type Config struct {
-	ControlPlane string `json:"control_plane"`
-	HostID       string `json:"host_id"`
+	ControlPlane     string `json:"control_plane"`
+	HostID           string `json:"host_id"`
+	SigningPublicKey string `json:"signing_public_key"`
 }
 
 // Store is the daemon's on-disk state directory.

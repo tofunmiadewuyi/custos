@@ -23,7 +23,7 @@ func TestCacheApplyAndLookup(t *testing.T) {
 	if err := cache.ApplySnapshot(protocol.Snapshot{Entries: []protocol.AccessEntry{
 		entry("fp-a", "deploy"),
 		entry("fp-b", "deploy", "root"),
-	}}); err != nil {
+	}}, 1); err != nil {
 		t.Fatal(err)
 	}
 	if cache.Len() != 2 {
@@ -48,7 +48,7 @@ func TestCacheApplyAndLookup(t *testing.T) {
 	}
 
 	// A snapshot replaces the whole set, not merges.
-	if err := cache.ApplySnapshot(protocol.Snapshot{Entries: []protocol.AccessEntry{entry("fp-z", "deploy")}}); err != nil {
+	if err := cache.ApplySnapshot(protocol.Snapshot{Entries: []protocol.AccessEntry{entry("fp-z", "deploy")}}, 2); err != nil {
 		t.Fatal(err)
 	}
 	if cache.Len() != 1 {

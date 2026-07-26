@@ -13,8 +13,14 @@ import (
 // Every change is persisted to cache.json as the last-known-good fallback.
 type Cache struct {
 	mu      sync.RWMutex
+	seq     uint64
 	entries map[string]protocol.AccessEntry
 	store   *Store
+}
+
+type persistedCache struct {
+	Seq     uint64                 `json:"seq"`
+	Entries []protocol.AccessEntry `json:"entries"`
 }
 
 // LoadCache reads the persisted cache. A missing file is not an error — a fresh
@@ -28,14 +34,22 @@ func (s *Store) LoadCache() (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
-	var entries []protocol.AccessEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
+	var pc persistedCache
+	if err := json.Unmarshal(data, &pc); err != nil {
 		return nil, err
 	}
-	for _, e := range entries {
+	c.seq = pc.Seq
+	for _, e := range pc.Entries {
 		c.entries[e.Fingerprint] = e
 	}
 	return c, nil
+}
+
+// Seq is the sequence number of the last applied snapshot.
+func (c *Cache) Seq() uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.seq
 }
 
 // Lookup returns the entry for a key fingerprint, if it is authorized here.
@@ -52,15 +66,24 @@ func (c *Cache) Len() int {
 	return len(c.entries)
 }
 
+// Purge clears every entry and persists the empty set, so the last-known-good file authorizes no one.
+func (c *Cache) Purge() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = map[string]protocol.AccessEntry{}
+	return c.persistLocked()
+}
+
 // ApplySnapshot replaces the whole cache with the control plane's authoritative
 // set. This is the reconcile path used on every (re)connect.
-func (c *Cache) ApplySnapshot(snap protocol.Snapshot) error {
+func (c *Cache) ApplySnapshot(snap protocol.Snapshot, seq uint64) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.entries = make(map[string]protocol.AccessEntry, len(snap.Entries))
 	for _, e := range snap.Entries {
 		c.entries[e.Fingerprint] = e
 	}
+	c.seq = seq
 	return c.persistLocked()
 }
 
@@ -88,7 +111,7 @@ func (c *Cache) persistLocked() error {
 	for _, e := range c.entries {
 		entries = append(entries, e)
 	}
-	data, err := json.Marshal(entries)
+	data, err := json.Marshal(persistedCache{Seq: c.seq, Entries: entries})
 	if err != nil {
 		return err
 	}

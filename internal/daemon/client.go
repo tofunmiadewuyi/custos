@@ -21,6 +21,8 @@ const (
 	maxReadBytes  = 1 << 20          // snapshots can be large; lift the default read cap
 	maxReconnect  = 30 * time.Second
 	logBufferSize = 256
+
+	maxBackoffAttempt = 5 // reconnectDelay caps here; used to throttle a rejected host
 )
 
 // Client maintains the daemon's live connection to the control plane: it
@@ -64,6 +66,15 @@ func (c *Client) Run(ctx context.Context) error {
 		err := c.connectAndServe(ctx, func() { attempt = 0 })
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// A policy-violation close = control plane rejected us (revoked/unknown), not a transient drop.
+		if websocket.CloseStatus(err) == websocket.StatusPolicyViolation {
+			if perr := c.cache.Purge(); perr != nil {
+				log.Printf("cache purge after rejection failed: %v", perr)
+			} else {
+				log.Printf("control plane rejected this host; purged local access cache")
+			}
+			attempt = maxBackoffAttempt
 		}
 		attempt++
 		delay := reconnectDelay(attempt)
@@ -147,30 +158,35 @@ func (c *Client) readLoop(ctx context.Context, conn *websocket.Conn, send chan p
 func (c *Client) dispatch(env protocol.Envelope, send chan protocol.Envelope) error {
 	switch env.Type {
 	case protocol.TypeSnapshot:
+		if err := c.verifySnapshot(env); err != nil {
+			log.Printf("dropping snapshot: %v", err)
+			return nil
+		}
+		if env.Seq != 0 && env.Seq <= c.cache.Seq() {
+			return nil
+		}
 		var s protocol.Snapshot
 		if err := json.Unmarshal(env.Data, &s); err != nil {
 			return err
 		}
-		return c.cache.ApplySnapshot(s)
-	case protocol.TypeGrant:
-		var g protocol.Grant
-		if err := json.Unmarshal(env.Data, &g); err != nil {
-			return err
-		}
-		return c.cache.ApplyGrant(g)
-	case protocol.TypeRevoke:
-		var r protocol.Revoke
-		if err := json.Unmarshal(env.Data, &r); err != nil {
-			return err
-		}
-		return c.cache.ApplyRevoke(r)
+		return c.cache.ApplySnapshot(s, env.Seq)
 	case protocol.TypePing:
 		pong, _ := protocol.NewEnvelope(protocol.TypePong, nil)
 		send <- pong
 		return nil
 	default:
-		return nil // ignore unknown message types 
+		return nil // ignore unknown message types
 	}
+}
+
+// verifySnapshot checks the control plane's signature over the snapshot. With no
+// stored signing key (dev), it accepts unsigned; once keyed it never downgrades.
+func (c *Client) verifySnapshot(env protocol.Envelope) error {
+	if c.cfg.SigningPublicKey == "" {
+		return nil
+	}
+	input := protocol.SnapshotSigningInput(c.cfg.HostID, env.Seq, env.Data)
+	return identity.Verify(c.cfg.SigningPublicKey, input, env.Sig)
 }
 
 // writeLoop is the sole writer to the connection; both the read loop (pongs) and

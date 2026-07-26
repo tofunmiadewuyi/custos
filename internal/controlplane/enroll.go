@@ -8,12 +8,16 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
 	"github.com/tofunmiadewuyi/custos/internal/protocol"
 )
 
-var errInvalidToken = errors.New("invalid or expired enrollment token")
+var (
+	errInvalidToken    = errors.New("invalid or expired enrollment token")
+	errAlreadyEnrolled = errors.New("host already enrolled")
+)
 
 func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	var req protocol.EnrollRequest
@@ -31,11 +35,22 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 		return
 	}
+	if errors.Is(err, errAlreadyEnrolled) {
+		http.Error(w, "host already enrolled; revoke it before re-enrolling", http.StatusConflict)
+		return
+	}
 	if err != nil {
 		serverError(w, "enrollment failed", err)
 		return
 	}
-	writeJSON(w, protocol.EnrollResponse{HostID: hostID})
+	writeJSON(w, protocol.EnrollResponse{HostID: hostID, SigningPublicKey: s.signingPublicKey()})
+}
+
+func (s *Server) signingPublicKey() string {
+	if s.signer == nil {
+		return ""
+	}
+	return s.signer.PublicKey()
 }
 
 // enroll validates the token, creates the host with the token's accounts, and
@@ -59,12 +74,27 @@ func (s *Server) enroll(ctx context.Context, req protocol.EnrollRequest) (string
 		return "", errInvalidToken
 	}
 
+	// Guard: one active host per machine. A revoked host frees the machine to
+	// re-enroll; an active one must be revoked first (deliberate admin action).
+	machineID := pgtype.Text{String: req.MachineID, Valid: req.MachineID != ""}
+	if machineID.Valid {
+		if _, err := q.GetActiveHostByMachineID(ctx, machineID); err == nil {
+			return "", errAlreadyEnrolled
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return "", err
+		}
+	}
+
 	host, err := q.CreateHost(ctx, db.CreateHostParams{
 		Name:        req.Hostname,
 		Hostname:    req.Hostname,
 		IdentityKey: req.PublicKey,
 		Accounts:    tok.Accounts,
+		MachineID:   machineID,
 	})
+	if isUniqueViolation(err) { // lost a race against a concurrent enroll
+		return "", errAlreadyEnrolled
+	}
 	if err != nil {
 		return "", err
 	}

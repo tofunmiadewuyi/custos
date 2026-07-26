@@ -14,6 +14,7 @@ import (
 
 	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
 	"github.com/tofunmiadewuyi/custos/internal/email"
+	"github.com/tofunmiadewuyi/custos/internal/identity"
 	"github.com/tofunmiadewuyi/custos/internal/vault"
 )
 
@@ -23,6 +24,7 @@ type Server struct {
 	q       *db.Queries
 	hub     *hub
 	wrapper vault.KeyWrapper // nil if no valid master key (secrets endpoints then 503)
+	signer  *identity.KeyPair
 	email   email.Sender
 	authRL  *rateLimiter
 }
@@ -38,6 +40,9 @@ func NewServer(cfg Config, pool *pgxpool.Pool) *Server {
 	}
 	if w, err := vault.NewAESWrapper(cfg.MasterKey); err == nil {
 		s.wrapper = w
+	}
+	if kp, err := identity.LoadKeyPair(cfg.SigningKey); err == nil {
+		s.signer = kp
 	}
 	return s
 }
@@ -84,7 +89,9 @@ func (s *Server) Handler() http.Handler {
 		r.Use(s.requireAdmin)
 		r.Post("/enroll-tokens", s.handleCreateEnrollToken)
 		r.Get("/hosts", s.handleListHosts)
+		r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
 		r.Get("/audit", s.handleAllAudit)
+		r.Get("/grant-audit", s.handleGrantAudit)
 
 		r.Get("/users", s.handleListUsers)
 		r.Post("/users/{id}/suspend", s.handleSuspendUser)

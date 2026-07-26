@@ -68,6 +68,40 @@ func (s *Server) handleAllAudit(w http.ResponseWriter, r *http.Request) {
 	s.writeResponse(w, auth.ClientPublicKey, entries)
 }
 
+type grantAuditEntry struct {
+	ID           string    `json:"id"`
+	Action       string    `json:"action"`
+	GrantID      string    `json:"grant_id"`
+	ActorID      string    `json:"actor_id"`
+	ActorEmail   string    `json:"actor_email"`
+	SubjectID    string    `json:"subject_id"`
+	SubjectEmail string    `json:"subject_email"`
+	Permission   string    `json:"permission"`
+	TargetKind   string    `json:"target_kind"`
+	TargetID     string    `json:"target_id"` // "" for global grants
+	At           time.Time `json:"at"`
+}
+
+// handleGrantAudit returns the most recent access grant/revoke events (admin).
+func (s *Server) handleGrantAudit(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.q.ListGrantAudit(r.Context())
+	if err != nil {
+		serverError(w, "could not load grant audit", err)
+		return
+	}
+	entries := make([]grantAuditEntry, 0, len(rows))
+	for _, a := range rows {
+		entries = append(entries, grantAuditEntry{
+			ID: uuidString(a.ID), Action: a.Action, GrantID: uuidString(a.GrantID),
+			ActorID: uuidString(a.ActorID), ActorEmail: a.ActorEmail,
+			SubjectID: uuidString(a.SubjectID), SubjectEmail: a.SubjectEmail,
+			Permission: a.Permission, TargetKind: a.TargetKind, TargetID: uuidString(a.TargetID),
+			At: a.At.Time,
+		})
+	}
+	s.writeResponse(w, authFrom(r.Context()).ClientPublicKey, entries)
+}
+
 func textString(t pgtype.Text) string {
 	if !t.Valid {
 		return ""

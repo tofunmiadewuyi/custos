@@ -39,12 +39,12 @@ func (s *Server) handleDaemon(w http.ResponseWriter, r *http.Request) {
 	hostID := uuidString(host.ID)
 
 	send := make(chan protocol.Envelope, 32)
-	s.hub.register(hostID, send)
+	s.hub.register(hostID, send, cancel)
 	defer s.hub.unregister(hostID, send)
 
 	// initial snapshot for the writer to send first
 	if snapshot, err := s.buildSnapshot(ctx, host); err == nil {
-		if env, err := protocol.NewEnvelope(protocol.TypeSnapshot, snapshot); err == nil {
+		if env, err := s.snapshotEnvelope(ctx, host.ID, snapshot); err == nil {
 			send <- env
 		}
 	}
@@ -91,6 +91,9 @@ func (s *Server) authenticateDaemon(ctx context.Context, conn *websocket.Conn) (
 	if err != nil {
 		return db.Host{}, err
 	}
+	if host.Status != "active" {
+		return db.Host{}, errors.New("host not active")
+	}
 	if err := identity.Verify(host.IdentityKey, nonce, auth.Signature); err != nil {
 		return db.Host{}, err
 	}
@@ -115,6 +118,26 @@ func (s *Server) buildSnapshot(ctx context.Context, host db.Host) (protocol.Snap
 	return protocol.Snapshot{Entries: entries}, nil
 }
 
+// snapshotEnvelope marshals snap, stamps the next per-host seq, and signs it. An
+// unset signer (tests) yields an unsigned envelope.
+func (s *Server) snapshotEnvelope(ctx context.Context, hostID pgtype.UUID, snap protocol.Snapshot) (protocol.Envelope, error) {
+	data, err := json.Marshal(snap)
+	if err != nil {
+		return protocol.Envelope{}, err
+	}
+	env := protocol.Envelope{Type: protocol.TypeSnapshot, Data: data}
+	if s.signer == nil {
+		return env, nil
+	}
+	seq, err := s.q.NextHostSeq(ctx, hostID)
+	if err != nil {
+		return protocol.Envelope{}, err
+	}
+	env.Seq = uint64(seq)
+	env.Sig = s.signer.Sign(protocol.SnapshotSigningInput(uuidString(hostID), env.Seq, data))
+	return env, nil
+}
+
 // writeDaemon is the sole writer to the connection: it pings on a ticker and
 // forwards messages pushed onto the send chanel
 func (s *Server) writeDaemon(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, send chan protocol.Envelope) {
@@ -123,6 +146,7 @@ func (s *Server) writeDaemon(ctx context.Context, cancel context.CancelFunc, con
 	for {
 		select {
 		case <-ctx.Done():
+			flushDaemon(conn, send) // write any queued envelopes (e.g. a revoke purge) before closing
 			return
 		case <-ticker.C:
 			ping, _ := protocol.NewEnvelope(protocol.TypePing, nil)
@@ -135,6 +159,24 @@ func (s *Server) writeDaemon(ctx context.Context, cancel context.CancelFunc, con
 				cancel()
 				return
 			}
+		}
+	}
+}
+
+// flushDaemon drains and writes any envelopes still queued when the connection
+// is torn down, on a fresh deadline since the connection ctx is already done.
+func flushDaemon(conn *websocket.Conn, send chan protocol.Envelope) {
+	for {
+		select {
+		case env := <-send:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := wsjson.Write(ctx, conn, env)
+			cancel()
+			if err != nil {
+				return
+			}
+		default:
+			return
 		}
 	}
 }
@@ -164,6 +206,7 @@ func (s *Server) recordAccessLog(ctx context.Context, host db.Host, lg protocol.
 	}
 	s.q.InsertSSHAccessLog(ctx, db.InsertSSHAccessLogParams{
 		HostID:      host.ID,
+		Hostname:    host.Hostname,
 		PublicKeyID: keyID,
 		Account:     lg.Account,
 		Allowed:     lg.Allowed,

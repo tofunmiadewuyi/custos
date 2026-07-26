@@ -3,17 +3,38 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/tofunmiadewuyi/custos/internal/identity"
 	"github.com/tofunmiadewuyi/custos/internal/protocol"
 )
+
+// machineID returns an app-specific hash of the systemd machine-id, so the same
+// box is recognizable on re-enroll without shipping the raw id. Empty if the
+// machine has no id (non-systemd, some containers) — the guard just won't apply.
+func machineID() string {
+	raw, err := os.ReadFile("/etc/machine-id")
+	if err != nil {
+		if raw, err = os.ReadFile("/var/lib/dbus/machine-id"); err != nil {
+			return ""
+		}
+	}
+	id := strings.TrimSpace(string(raw))
+	if id == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte("custos-host:" + id))
+	return hex.EncodeToString(sum[:])
+}
 
 // EnrollOptions are the inputs to a one-time enrollment.
 type EnrollOptions struct {
@@ -37,6 +58,7 @@ func Enroll(ctx context.Context, store *Store, opts EnrollOptions) error {
 		Token:     opts.Token,
 		Hostname:  opts.Hostname,
 		PublicKey: kp.PublicKey(),
+		MachineID: machineID(),
 	})
 	if err != nil {
 		return err
@@ -46,7 +68,11 @@ func Enroll(ctx context.Context, store *Store, opts EnrollOptions) error {
 	if err := store.SaveIdentity(kp); err != nil {
 		return err
 	}
-	return store.SaveConfig(Config{ControlPlane: opts.ControlPlane, HostID: resp.HostID})
+	return store.SaveConfig(Config{
+		ControlPlane:     opts.ControlPlane,
+		HostID:           resp.HostID,
+		SigningPublicKey: resp.SigningPublicKey,
+	})
 }
 
 func postEnroll(ctx context.Context, baseURL string, req protocol.EnrollRequest) (protocol.EnrollResponse, error) {
