@@ -36,7 +36,7 @@ RuntimeDirectory=custos
 # '+' runs this as root even though the service is User=custos: it swaps in a
 # daemon-staged binary before start. No-op when nothing is staged.
 ExecStartPre=+/usr/local/bin/custosd apply-update --dir /var/lib/custos
-ExecStart=/usr/local/bin/custosd run --dir /var/lib/custos --socket /run/custos/custosd.sock
+ExecStart=/usr/local/bin/custosd run --dir /var/lib/custos --socket /run/custos/custosd.sock --secret-socket /run/custos/secrets.sock
 Restart=always
 RestartSec=5
 
@@ -69,6 +69,9 @@ func cmdInstall(args []string) {
 	fmt.Println("\ninstalled. next:")
 	fmt.Printf("  sudo -u %s %s enroll --control-plane <url> --token <token> --dir %s\n", installUser, installBin, installStateDir)
 	fmt.Println("  sudo systemctl enable --now custosd")
+	fmt.Printf("\nto let an app consume secrets, add its service user to the %s group:\n", installUser)
+	fmt.Printf("  sudo usermod -aG %s <app-service-user>\n", installUser)
+	fmt.Printf("  then launch it via: %s exec --set <name> -- <command>\n", installBin)
 }
 
 func ensureUser(name string) (uid, gid int) {

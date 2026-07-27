@@ -17,7 +17,8 @@ import (
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	dir := fs.String("dir", daemon.DefaultDir, "state directory")
-	socket := fs.String("socket", daemon.DefaultSocket, "daemon socket path")
+	socket := fs.String("socket", daemon.DefaultSocket, "authkeys socket path")
+	secretSocket := fs.String("secret-socket", daemon.DefaultSecretSocket, "secrets socket path (custosd exec)")
 	fs.Parse(args)
 
 	store, err := daemon.OpenStore(*dir)
@@ -47,15 +48,24 @@ func cmdRun(args []string) {
 	// Keep secrets off swap and out of core dumps before any land in memory.
 	hardenMemory()
 
-	ln, err := listenSocket(*socket)
+	ln, err := listenSocket(*socket, 0o600)
 	if err != nil {
 		fatal("run: %v", err)
 	}
 	defer ln.Close()
 
+	// The secrets socket needs app service users to reach it (custosd exec runs as
+	// them), so 0660 + the custos group, not the authkeys socket's 0600.
+	sln, err := listenSocket(*secretSocket, 0o660)
+	if err != nil {
+		fatal("run: %v", err)
+	}
+	defer sln.Close()
+
 	secrets := daemon.NewSecretStore(encKey)
 	client := daemon.NewClient(cfg, id, cache, secrets, version, filepath.Join(*dir, "update"))
 	go daemon.ServeAuth(ln, cache, client.RecordAccess)
+	go daemon.ServeSecrets(sln, secrets)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -71,9 +81,9 @@ func cmdRun(args []string) {
 	}
 }
 
-// listenSocket binds the unix socket, replacing any stale file left by a crash,
-// and restricts it to the daemon user (authkeys runs as the same user).
-func listenSocket(path string) (net.Listener, error) {
+// listenSocket binds the unix socket at path with the given mode, replacing any
+// stale file left by a crash.
+func listenSocket(path string, mode os.FileMode) (net.Listener, error) {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
@@ -81,7 +91,7 @@ func listenSocket(path string) (net.Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if err := os.Chmod(path, mode); err != nil {
 		ln.Close()
 		return nil, err
 	}

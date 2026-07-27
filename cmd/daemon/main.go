@@ -21,6 +21,8 @@ func main() {
 		cmdAuthkeys(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "exec":
+		cmdExec(os.Args[2:])
 	case "apply-update":
 		cmdApplyUpdate(os.Args[2:])
 	case "status":
