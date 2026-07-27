@@ -102,6 +102,23 @@ func (q *Queries) DeleteSetEntries(ctx context.Context, setID pgtype.UUID) error
 	return err
 }
 
+const deleteSetEntry = `-- name: DeleteSetEntry :execrows
+delete from secret_set_entries where set_id = $1 and key = $2
+`
+
+type DeleteSetEntryParams struct {
+	SetID pgtype.UUID
+	Key   string
+}
+
+func (q *Queries) DeleteSetEntry(ctx context.Context, arg DeleteSetEntryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSetEntry, arg.SetID, arg.Key)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getSet = `-- name: GetSet :one
 select id, name, created_by, created_at, updated_at from secret_sets where id = $1
 `
@@ -409,4 +426,31 @@ func (q *Queries) UnbindSet(ctx context.Context, arg UnbindSetParams) (int64, er
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const upsertSetEntry = `-- name: UpsertSetEntry :exec
+insert into secret_set_entries (set_id, key, ciphertext, nonce, wrapped_key)
+values ($1, $2, $3, $4, $5)
+on conflict (set_id, key) do update
+  set ciphertext = excluded.ciphertext, nonce = excluded.nonce,
+      wrapped_key = excluded.wrapped_key, updated_at = now()
+`
+
+type UpsertSetEntryParams struct {
+	SetID      pgtype.UUID
+	Key        string
+	Ciphertext []byte
+	Nonce      []byte
+	WrappedKey []byte
+}
+
+func (q *Queries) UpsertSetEntry(ctx context.Context, arg UpsertSetEntryParams) error {
+	_, err := q.db.Exec(ctx, upsertSetEntry,
+		arg.SetID,
+		arg.Key,
+		arg.Ciphertext,
+		arg.Nonce,
+		arg.WrappedKey,
+	)
+	return err
 }

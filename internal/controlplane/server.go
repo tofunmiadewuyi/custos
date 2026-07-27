@@ -105,6 +105,8 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/sets/{id}/audit", s.handleSetAudit)
 		r.Put("/sets/{id}", s.handleUpdateSet)
 		r.Delete("/sets/{id}", s.handleDeleteSet)
+		r.Put("/sets/{id}/entries/{key}", s.handleUpsertSetEntry)
+		r.Delete("/sets/{id}/entries/{key}", s.handleDeleteSetEntry)
 		r.Post("/hosts/{id}/sets", s.handleBindSet)
 		r.Delete("/hosts/{id}/sets/{setId}", s.handleUnbindSet)
 	})

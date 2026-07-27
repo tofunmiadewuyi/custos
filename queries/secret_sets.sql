@@ -47,6 +47,16 @@ select host_id from host_set_bindings where set_id = $1 and revoked_at is null;
 -- name: DeleteSetEntries :exec
 delete from secret_set_entries where set_id = $1;
 
+-- name: UpsertSetEntry :exec
+insert into secret_set_entries (set_id, key, ciphertext, nonce, wrapped_key)
+values ($1, $2, $3, $4, $5)
+on conflict (set_id, key) do update
+  set ciphertext = excluded.ciphertext, nonce = excluded.nonce,
+      wrapped_key = excluded.wrapped_key, updated_at = now();
+
+-- name: DeleteSetEntry :execrows
+delete from secret_set_entries where set_id = $1 and key = $2;
+
 -- name: TouchSet :exec
 update secret_sets set updated_at = now() where id = $1;
 

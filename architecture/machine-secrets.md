@@ -146,7 +146,9 @@ failed. The daemon logs denials host-side. exec retries the transient "not synce
 
 ## Deferred (not blocking "it works")
 
-- `machine_read` audit back to the CP (the daemon only logs denials locally now).
 - Live rotation without restart — a tmpfs file the daemon rewrites + the app watches, or the socket
   queried at runtime; both reuse the in-memory store.
-- Signing the `upgrade` message; TPM-backed host keys.
+- Signing the `upgrade` message.
+- **TPM/PKCS#11-backed host keys** — generate the identity/encryption keys inside tamper-resistant
+  hardware so they're non-extractable; a stolen disk image then can't impersonate the host or open a
+  captured bundle. Platform-specific (and TPM 2.0's Curve25519 support is limited, so likely P-256).

@@ -388,6 +388,139 @@ func (s *Server) handleUnbindSet(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleUpsertSetEntry adds or replaces a single entry — change one secret without
+// re-sending the whole set.
+func (s *Server) handleUpsertSetEntry(w http.ResponseWriter, r *http.Request) {
+	if s.wrapper == nil {
+		http.Error(w, "vault unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	auth := authFrom(r.Context())
+	setID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid set id", http.StatusBadRequest)
+		return
+	}
+	key := chi.URLParam(r, "key")
+	if key == "" {
+		http.Error(w, "key is required", http.StatusBadRequest)
+		return
+	}
+	if !s.canSet(r.Context(), auth, "set.manage", setID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	set, err := s.q.GetSet(r.Context(), setID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "set not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		serverError(w, "could not load set", err)
+		return
+	}
+	var req struct {
+		Value string `json:"value"`
+	}
+	if err := s.readRequest(r, &req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	sealed, err := vault.Seal(r.Context(), s.wrapper, []byte(req.Value))
+	if err != nil {
+		serverError(w, "could not seal value", err)
+		return
+	}
+
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		serverError(w, "could not update entry", err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	q := db.New(tx)
+
+	if err := q.UpsertSetEntry(r.Context(), db.UpsertSetEntryParams{
+		SetID: setID, Key: key, Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedKey: sealed.WrappedKey,
+	}); err != nil {
+		serverError(w, "could not update entry", err)
+		return
+	}
+	if err := q.TouchSet(r.Context(), setID); err != nil {
+		serverError(w, "could not update entry", err)
+		return
+	}
+	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{
+		SetName: set.Name, EntryKey: pgText(key), Action: "edit", Actor: auth.UserID,
+	}); err != nil {
+		serverError(w, "could not update entry", err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		serverError(w, "could not update entry", err)
+		return
+	}
+	s.pushSetToHosts(r.Context(), setID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDeleteSetEntry(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	setID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid set id", http.StatusBadRequest)
+		return
+	}
+	key := chi.URLParam(r, "key")
+	if !s.canSet(r.Context(), auth, "set.manage", setID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	set, err := s.q.GetSet(r.Context(), setID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "set not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		serverError(w, "could not load set", err)
+		return
+	}
+
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		serverError(w, "could not delete entry", err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	q := db.New(tx)
+
+	n, err := q.DeleteSetEntry(r.Context(), db.DeleteSetEntryParams{SetID: setID, Key: key})
+	if err != nil {
+		serverError(w, "could not delete entry", err)
+		return
+	}
+	if n == 0 {
+		http.Error(w, "entry not found", http.StatusNotFound)
+		return
+	}
+	if err := q.TouchSet(r.Context(), setID); err != nil {
+		serverError(w, "could not delete entry", err)
+		return
+	}
+	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{
+		SetName: set.Name, EntryKey: pgText(key), Action: "edit", Actor: auth.UserID,
+	}); err != nil {
+		serverError(w, "could not delete entry", err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		serverError(w, "could not delete entry", err)
+		return
+	}
+	s.pushSetToHosts(r.Context(), setID)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 type setAuditView struct {
 	Action   string    `json:"action"`
 	SetName  string    `json:"set_name"`
