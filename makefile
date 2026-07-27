@@ -1,4 +1,4 @@
-.PHONY: test test-race vet build-daemon run-daemon build-api serve-api gen-keys migrate create-admin \
+.PHONY: test test-race test-integration vet build-daemon run-daemon build-api serve-api gen-keys migrate create-admin \
 	build-copy-daemon copy-dmon snapshot-daemon snapshot-api \
 	release-daemon release-api rerelease-daemon rerelease-api
 
@@ -11,6 +11,10 @@ test:
 
 test-race:
 	go test -race ./...
+
+# Needs a Docker daemon.
+test-integration:
+	go test -tags integration ./...
 
 vet:
 	go vet ./...
