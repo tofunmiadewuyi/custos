@@ -62,82 +62,104 @@ func (s *Server) Handler() http.Handler {
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	r.Get("/daemon", s.handleDaemon)
 
-	// Unauthenticated endpoints — rate-limited per IP against brute force.
-	r.Group(func(r chi.Router) {
-		r.Use(s.authRL.middleware)
-		r.Post("/enroll", s.handleEnroll)
-		r.Post("/login", s.handleLogin)
-		r.Post("/refresh", s.handleRefresh)
-		r.Post("/invitations/accept", s.handleAcceptInvitation)
-		r.Post("/password-reset", s.handlePasswordReset)
-		r.Post("/password-reset/confirm", s.handlePasswordResetConfirm)
-	})
-
-	r.Group(func(r chi.Router) {
-		r.Use(s.requireAuth)
-		r.Get("/me", s.handleMe)
-		r.Patch("/me", s.handleUpdateProfile)
-		r.Post("/logout", s.handleLogout)
-
-		r.Post("/keys", s.handleAddKey)
-		r.Get("/keys", s.handleListKeys)
-		r.Delete("/keys/{id}", s.handleDeleteKey)
-
-		r.Post("/secrets", s.handleCreateSecret)
-		r.Get("/secrets", s.handleListSecrets)
-		r.Get("/secrets/{id}", s.handleGetSecret)
-		r.Get("/secrets/{id}/reveal", s.handleRevealSecret)
-		r.Get("/secrets/{id}/audit", s.handleSecretAudit)
-		r.Put("/secrets/{id}", s.handleUpdateSecret)
-		r.Delete("/secrets/{id}", s.handleDeleteSecret)
-
-		// Groups and sets self-gate per-handler via grants (canGlobal/canGroup/canSet).
-		r.Post("/groups", s.handleCreateGroup)
-		r.Get("/groups", s.handleListGroups)
-		r.Get("/groups/{id}", s.handleGetGroup)
-		r.Delete("/groups/{id}", s.handleDeleteGroup)
-		r.Post("/groups/{id}/resources", s.handleAddGroupResource)
-		r.Delete("/groups/{id}/resources", s.handleRemoveGroupResource)
-
-		r.Post("/sets", s.handleCreateSet)
-		r.Get("/sets", s.handleListSets)
-		r.Get("/sets/{id}", s.handleGetSet)
-		r.Get("/sets/{id}/audit", s.handleSetAudit)
-		r.Put("/sets/{id}", s.handleUpdateSet)
-		r.Delete("/sets/{id}", s.handleDeleteSet)
-		r.Put("/sets/{id}/entries/{key}", s.handleUpsertSetEntry)
-		r.Delete("/sets/{id}/entries/{key}", s.handleDeleteSetEntry)
-		r.Post("/hosts/{id}/sets", s.handleBindSet)
-		r.Delete("/hosts/{id}/sets/{setId}", s.handleUnbindSet)
-	})
-
-	r.Group(func(r chi.Router) {
-		r.Use(s.requireAdmin)
-		r.Post("/enroll-tokens", s.handleCreateEnrollToken)
-		r.Get("/hosts", s.handleListHosts)
-		r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
-		r.Post("/hosts/{id}/upgrade", s.handleUpgradeHost)
-		r.Post("/upgrade", s.handleUpgradeFleet)
-		r.Get("/audit", s.handleAllAudit)
-		r.Get("/grant-audit", s.handleGrantAudit)
-
-		r.Get("/users", s.handleListUsers)
-		r.Post("/users/{id}/suspend", s.handleSuspendUser)
-		r.Post("/users/{id}/activate", s.handleActivateUser)
-		r.Delete("/users/{id}", s.handleRemoveUser)
-
-		r.Post("/invitations", s.handleCreateInvitation)
-		r.Get("/invitations", s.handleListInvitations)
-		r.Delete("/invitations/{id}", s.handleCancelInvitation)
-		r.Post("/invitations/{id}/resend", s.handleResendInvitation)
-
-		r.Get("/grants", s.handleListGrants)
-		r.Post("/grants", s.handleCreateGrant)
-		r.Delete("/grants/{id}", s.handleRevokeGrant)
-
-		r.Get("/secrets/{id}/access-audit", s.handleSecretAccessAudit)
-	})
+	r.Group(s.publicRoutes) // unauthenticated, rate-limited
+	r.Group(s.userRoutes)   // any valid session
+	r.Group(s.adminRoutes)  // admin only
 	return r
+}
+
+// publicRoutes are unauthenticated and rate-limited per IP against brute force.
+func (s *Server) publicRoutes(r chi.Router) {
+	r.Use(s.authRL.middleware)
+	r.Post("/enroll", s.handleEnroll)
+	r.Post("/login", s.handleLogin)
+	r.Post("/refresh", s.handleRefresh)
+	r.Post("/invitations/accept", s.handleAcceptInvitation)
+	r.Route("/password-reset", func(r chi.Router) {
+		r.Post("/", s.handlePasswordReset)
+		r.Post("/confirm", s.handlePasswordResetConfirm)
+	})
+}
+
+// userRoutes require a valid session. Secrets, groups, and sets self-gate per
+// handler via grants (canGlobal/canSecret/canGroup/canSet); admins bypass.
+func (s *Server) userRoutes(r chi.Router) {
+	r.Use(s.requireAuth)
+	r.Get("/me", s.handleMe)
+	r.Patch("/me", s.handleUpdateProfile)
+	r.Post("/logout", s.handleLogout)
+
+	r.Route("/keys", func(r chi.Router) {
+		r.Post("/", s.handleAddKey)
+		r.Get("/", s.handleListKeys)
+		r.Delete("/{id}", s.handleDeleteKey)
+	})
+
+	// /secrets stays flat: /secrets/{id}/access-audit is admin-only (spans tiers).
+	r.Post("/secrets", s.handleCreateSecret)
+	r.Get("/secrets", s.handleListSecrets)
+	r.Get("/secrets/{id}", s.handleGetSecret)
+	r.Get("/secrets/{id}/reveal", s.handleRevealSecret)
+	r.Get("/secrets/{id}/audit", s.handleSecretAudit)
+	r.Put("/secrets/{id}", s.handleUpdateSecret)
+	r.Delete("/secrets/{id}", s.handleDeleteSecret)
+
+	r.Route("/groups", func(r chi.Router) {
+		r.Post("/", s.handleCreateGroup)
+		r.Get("/", s.handleListGroups)
+		r.Get("/{id}", s.handleGetGroup)
+		r.Delete("/{id}", s.handleDeleteGroup)
+		r.Post("/{id}/resources", s.handleAddGroupResource)
+		r.Delete("/{id}/resources", s.handleRemoveGroupResource)
+	})
+
+	r.Route("/sets", func(r chi.Router) {
+		r.Post("/", s.handleCreateSet)
+		r.Get("/", s.handleListSets)
+		r.Get("/{id}", s.handleGetSet)
+		r.Get("/{id}/audit", s.handleSetAudit)
+		r.Put("/{id}", s.handleUpdateSet)
+		r.Delete("/{id}", s.handleDeleteSet)
+		r.Put("/{id}/entries/{key}", s.handleUpsertSetEntry)
+		r.Delete("/{id}/entries/{key}", s.handleDeleteSetEntry)
+	})
+
+	// Binding a set to a host is self-gated (set.read + host.access); the rest of /hosts is admin.
+	r.Post("/hosts/{id}/sets", s.handleBindSet)
+	r.Delete("/hosts/{id}/sets/{setId}", s.handleUnbindSet)
+}
+
+// adminRoutes require an admin session.
+func (s *Server) adminRoutes(r chi.Router) {
+	r.Use(s.requireAdmin)
+	r.Post("/enroll-tokens", s.handleCreateEnrollToken)
+	r.Post("/upgrade", s.handleUpgradeFleet)
+	r.Get("/audit", s.handleAllAudit)
+	r.Get("/grant-audit", s.handleGrantAudit)
+	r.Get("/secrets/{id}/access-audit", s.handleSecretAccessAudit)
+
+	// /hosts and /invitations stay flat: each spans tiers (/hosts/{id}/sets is user, /invitations/accept is public).
+	r.Get("/hosts", s.handleListHosts)
+	r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
+	r.Post("/hosts/{id}/upgrade", s.handleUpgradeHost)
+
+	r.Post("/invitations", s.handleCreateInvitation)
+	r.Get("/invitations", s.handleListInvitations)
+	r.Delete("/invitations/{id}", s.handleCancelInvitation)
+	r.Post("/invitations/{id}/resend", s.handleResendInvitation)
+
+	r.Route("/users", func(r chi.Router) {
+		r.Get("/", s.handleListUsers)
+		r.Post("/{id}/suspend", s.handleSuspendUser)
+		r.Post("/{id}/activate", s.handleActivateUser)
+		r.Delete("/{id}", s.handleRemoveUser)
+	})
+
+	r.Route("/grants", func(r chi.Router) {
+		r.Get("/", s.handleListGrants)
+		r.Post("/", s.handleCreateGrant)
+		r.Delete("/{id}", s.handleRevokeGrant)
+	})
 }
 
 func (s *Server) corsMiddleware() func(http.Handler) http.Handler {
