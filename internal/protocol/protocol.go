@@ -134,20 +134,22 @@ type Snapshot struct {
 	Entries []AccessEntry `json:"entries"`
 }
 
-// SealedSet is one machine-secret set delivered to a host: a hybrid-sealed JSON
-// map {KEY: value} the daemon opens with its X25519 key. AsUser, when set, scopes
-// which unix account the daemon's socket will serve it to. Version bumps on edit.
-type SealedSet struct {
-	Name    string `json:"name"`
-	AsUser  string `json:"as_user,omitempty"`
-	Version uint64 `json:"version"`
-	Sealed  []byte `json:"sealed"`
+// SecretSet is one set in cleartext: env {KEY:value}, the unix account it's scoped to, and an edit version.
+type SecretSet struct {
+	Name    string            `json:"name"`
+	AsUser  string            `json:"as_user,omitempty"`
+	Version uint64            `json:"version"`
+	Values  map[string]string `json:"values"`
 }
 
-// SecretSets is the full set of sealed sets bound to a host, sent on connect and
-// on any change; signed and sequenced like a Snapshot but under the sets tag.
+// SecretSets is the full cleartext bundle for a host, sealed as one blob before sending.
 type SecretSets struct {
-	Sets []SealedSet `json:"sets"`
+	Sets []SecretSet `json:"sets"`
+}
+
+// SealedSecretSets is the TypeSecretSets payload: the whole bundle hybrid-sealed to the host key.
+type SealedSecretSets struct {
+	Sealed []byte `json:"sealed"`
 }
 
 type Grant struct {

@@ -39,6 +39,13 @@ func cmdRun(args []string) {
 	if err != nil {
 		fatal("run: %v", err)
 	}
+	encKey, err := store.LoadEncryptionKey()
+	if err != nil {
+		log.Printf("run: no encryption key (%v); machine secrets disabled", err)
+	}
+
+	// Keep secrets off swap and out of core dumps before any land in memory.
+	hardenMemory()
 
 	ln, err := listenSocket(*socket)
 	if err != nil {
@@ -46,7 +53,8 @@ func cmdRun(args []string) {
 	}
 	defer ln.Close()
 
-	client := daemon.NewClient(cfg, id, cache, version, filepath.Join(*dir, "update"))
+	secrets := daemon.NewSecretStore(encKey)
+	client := daemon.NewClient(cfg, id, cache, secrets, version, filepath.Join(*dir, "update"))
 	go daemon.ServeAuth(ln, cache, client.RecordAccess)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

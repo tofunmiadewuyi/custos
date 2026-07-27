@@ -39,6 +39,7 @@ type Client struct {
 	cfg       Config
 	identity  *identity.KeyPair
 	cache     *Cache
+	secrets   *SecretStore
 	logs      chan protocol.AccessLog
 	version   string
 	updateDir string
@@ -48,11 +49,12 @@ type Client struct {
 	upgrading   atomic.Bool
 }
 
-func NewClient(cfg Config, id *identity.KeyPair, cache *Cache, version, updateDir string) *Client {
+func NewClient(cfg Config, id *identity.KeyPair, cache *Cache, secrets *SecretStore, version, updateDir string) *Client {
 	return &Client{
 		cfg:       cfg,
 		identity:  id,
 		cache:     cache,
+		secrets:   secrets,
 		logs:      make(chan protocol.AccessLog, logBufferSize),
 		version:   version,
 		updateDir: updateDir,
@@ -208,6 +210,25 @@ func (c *Client) dispatch(env protocol.Envelope, send chan protocol.Envelope) er
 			return err
 		}
 		return c.cache.ApplySnapshot(s, env.Seq)
+	case protocol.TypeSecretSets:
+		if c.secrets == nil {
+			return nil
+		}
+		if err := c.verifySecretSets(env); err != nil {
+			log.Printf("dropping secret sets: %v", err)
+			return nil
+		}
+		if env.Seq != 0 && env.Seq <= c.secrets.Seq() {
+			return nil
+		}
+		var sealed protocol.SealedSecretSets
+		if err := json.Unmarshal(env.Data, &sealed); err != nil {
+			return err
+		}
+		if err := c.secrets.Apply(sealed, env.Seq); err != nil {
+			log.Printf("dropping secret sets: %v", err)
+		}
+		return nil
 	case protocol.TypeUpgrade:
 		var up protocol.Upgrade
 		if err := json.Unmarshal(env.Data, &up); err != nil {
@@ -252,6 +273,16 @@ func (c *Client) verifySnapshot(env protocol.Envelope) error {
 		return nil
 	}
 	input := protocol.SnapshotSigningInput(c.cfg.HostID, env.Seq, env.Data)
+	return identity.Verify(c.cfg.SigningPublicKey, input, env.Sig)
+}
+
+// verifySecretSets checks the control plane's signature over a secret-sets push,
+// under the sets domain tag. Unsigned is accepted only when no signing key is set.
+func (c *Client) verifySecretSets(env protocol.Envelope) error {
+	if c.cfg.SigningPublicKey == "" {
+		return nil
+	}
+	input := protocol.SecretSetsSigningInput(c.cfg.HostID, env.Seq, env.Data)
 	return identity.Verify(c.cfg.SigningPublicKey, input, env.Sig)
 }
 

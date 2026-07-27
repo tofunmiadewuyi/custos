@@ -18,7 +18,7 @@ func TestDispatchSnapshotSigning(t *testing.T) {
 
 	store, _ := OpenStore(t.TempDir())
 	cache, _ := store.LoadCache()
-	c := NewClient(Config{HostID: hostID, SigningPublicKey: cp.PublicKey()}, id, cache, "v0.0.0", t.TempDir())
+	c := NewClient(Config{HostID: hostID, SigningPublicKey: cp.PublicKey()}, id, cache, nil, "v0.0.0", t.TempDir())
 	send := make(chan protocol.Envelope, 1)
 
 	signed := func(signer *identity.KeyPair, sigHostID string, seq uint64, fps ...string) protocol.Envelope {

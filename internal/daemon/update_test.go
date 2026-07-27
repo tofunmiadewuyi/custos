@@ -43,7 +43,7 @@ func newTestClient(t *testing.T) *Client {
 	t.Helper()
 	store, _ := OpenStore(t.TempDir())
 	cache, _ := store.LoadCache()
-	return NewClient(Config{HostID: "h"}, nil, cache, "v1.0.0", filepath.Join(t.TempDir(), "update"))
+	return NewClient(Config{HostID: "h"}, nil, cache, nil, "v1.0.0", filepath.Join(t.TempDir(), "update"))
 }
 
 func TestStageUpgrade(t *testing.T) {

@@ -55,9 +55,11 @@ func (s *Server) handleDaemon(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// sealed secret sets bound to this host, reconciled on every connect
-	if sets, err := s.buildSecretSets(ctx, host); err == nil {
-		if env, err := s.secretSetsEnvelope(ctx, host.ID, sets); err == nil {
-			send <- env
+	if host.EncryptionKey != "" {
+		if sets, err := s.buildSecretSets(ctx, host); err == nil {
+			if env, err := s.secretSetsEnvelope(ctx, host, sets); err == nil {
+				send <- env
+			}
 		}
 	}
 

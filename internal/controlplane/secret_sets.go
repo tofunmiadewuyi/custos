@@ -388,56 +388,56 @@ func (s *Server) handleUnbindSet(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// buildSecretSets resolves the host's bound sets, decrypts each entry, and seals
-// the {key: value} map to the host's X25519 key. Empty when the host has no key.
+// buildSecretSets resolves the host's bound sets and decrypts each entry into a
+// cleartext bundle. Sealing happens once, in secretSetsEnvelope.
 func (s *Server) buildSecretSets(ctx context.Context, host db.Host) (protocol.SecretSets, error) {
-	if s.wrapper == nil || host.EncryptionKey == "" {
+	if s.wrapper == nil {
 		return protocol.SecretSets{}, nil
-	}
-	recipient, err := base64.StdEncoding.DecodeString(host.EncryptionKey)
-	if err != nil {
-		return protocol.SecretSets{}, err
 	}
 	rows, err := s.q.SetsForHost(ctx, host.ID)
 	if err != nil {
 		return protocol.SecretSets{}, err
 	}
-	sets := make([]protocol.SealedSet, 0, len(rows))
+	sets := make([]protocol.SecretSet, 0, len(rows))
 	for _, row := range rows {
 		entries, err := s.q.GetSetEntries(ctx, row.ID)
 		if err != nil {
 			return protocol.SecretSets{}, err
 		}
-		m := make(map[string]string, len(entries))
+		values := make(map[string]string, len(entries))
 		for _, e := range entries {
 			val, err := vault.Open(ctx, s.wrapper, vault.Sealed{Ciphertext: e.Ciphertext, Nonce: e.Nonce, WrappedKey: e.WrappedKey})
 			if err != nil {
 				return protocol.SecretSets{}, err
 			}
-			m[e.Key] = string(val)
+			values[e.Key] = string(val)
 		}
-		data, err := json.Marshal(m)
-		if err != nil {
-			return protocol.SecretSets{}, err
-		}
-		sealed, err := hybrid.Seal(recipient, data)
-		if err != nil {
-			return protocol.SecretSets{}, err
-		}
-		sets = append(sets, protocol.SealedSet{
+		sets = append(sets, protocol.SecretSet{
 			Name:    row.Name,
 			AsUser:  textString(row.AsUser),
 			Version: uint64(row.UpdatedAt.Time.UnixNano()),
-			Sealed:  sealed,
+			Values:  values,
 		})
 	}
 	return protocol.SecretSets{Sets: sets}, nil
 }
 
-// secretSetsEnvelope marshals the sets, stamps the next per-host set-seq, and signs
-// it under the sets tag. An unset signer (tests) yields an unsigned envelope.
-func (s *Server) secretSetsEnvelope(ctx context.Context, hostID pgtype.UUID, sets protocol.SecretSets) (protocol.Envelope, error) {
-	data, err := json.Marshal(sets)
+// secretSetsEnvelope seals the whole bundle to the host's X25519 key as one blob,
+// stamps the next per-host set-seq, and signs it under the sets tag.
+func (s *Server) secretSetsEnvelope(ctx context.Context, host db.Host, sets protocol.SecretSets) (protocol.Envelope, error) {
+	plain, err := json.Marshal(sets)
+	if err != nil {
+		return protocol.Envelope{}, err
+	}
+	recipient, err := base64.StdEncoding.DecodeString(host.EncryptionKey)
+	if err != nil {
+		return protocol.Envelope{}, err
+	}
+	sealed, err := hybrid.Seal(recipient, plain)
+	if err != nil {
+		return protocol.Envelope{}, err
+	}
+	data, err := json.Marshal(protocol.SealedSecretSets{Sealed: sealed})
 	if err != nil {
 		return protocol.Envelope{}, err
 	}
@@ -445,26 +445,26 @@ func (s *Server) secretSetsEnvelope(ctx context.Context, hostID pgtype.UUID, set
 	if s.signer == nil {
 		return env, nil
 	}
-	seq, err := s.q.NextHostSetSeq(ctx, hostID)
+	seq, err := s.q.NextHostSetSeq(ctx, host.ID)
 	if err != nil {
 		return protocol.Envelope{}, err
 	}
 	env.Seq = uint64(seq)
-	env.Sig = s.signer.Sign(protocol.SecretSetsSigningInput(uuidString(hostID), env.Seq, data))
+	env.Sig = s.signer.Sign(protocol.SecretSetsSigningInput(uuidString(host.ID), env.Seq, data))
 	return env, nil
 }
 
-// pushSecretSets rebuilds and pushes the host's sealed sets to its live connection.
+// pushSecretSets rebuilds and pushes the host's sealed bundle to its live connection.
 func (s *Server) pushSecretSets(ctx context.Context, hostID pgtype.UUID) {
 	host, err := s.q.GetHostByID(ctx, hostID)
-	if err != nil {
+	if err != nil || host.EncryptionKey == "" {
 		return
 	}
 	sets, err := s.buildSecretSets(ctx, host)
 	if err != nil {
 		return
 	}
-	env, err := s.secretSetsEnvelope(ctx, hostID, sets)
+	env, err := s.secretSetsEnvelope(ctx, host, sets)
 	if err != nil {
 		return
 	}
