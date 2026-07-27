@@ -1,10 +1,19 @@
-.PHONY: build-daemon run-daemon build-api serve-api gen-keys migrate create-admin \
+.PHONY: test test-race vet build-daemon run-daemon build-api serve-api gen-keys migrate create-admin \
 	build-copy-daemon copy-dmon snapshot-daemon snapshot-api \
 	release-daemon release-api rerelease-daemon rerelease-api
 
 VERSION ?= dev
 GOARCH  ?= amd64
 LDFLAGS  = -s -w -X main.version=$(VERSION)
+
+test:
+	go test ./...
+
+test-race:
+	go test -race ./...
+
+vet:
+	go vet ./...
 
 build-daemon:
 	go build -o bin/daemon ./cmd/daemon
