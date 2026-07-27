@@ -388,6 +388,51 @@ func (s *Server) handleUnbindSet(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type setAuditView struct {
+	Action   string    `json:"action"`
+	SetName  string    `json:"set_name"`
+	EntryKey string    `json:"entry_key,omitempty"`
+	HostID   string    `json:"host_id,omitempty"`
+	Actor    string    `json:"actor,omitempty"`
+	At       time.Time `json:"at"`
+}
+
+func (s *Server) handleSetAudit(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	setID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid set id", http.StatusBadRequest)
+		return
+	}
+	if !s.canSet(r.Context(), auth, "set.read", setID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	set, err := s.q.GetSet(r.Context(), setID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "set not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		serverError(w, "could not load set", err)
+		return
+	}
+	rows, err := s.q.ListSetAudit(r.Context(), set.Name)
+	if err != nil {
+		serverError(w, "could not load audit", err)
+		return
+	}
+	views := make([]setAuditView, 0, len(rows))
+	for _, row := range rows {
+		views = append(views, setAuditView{
+			Action: row.Action, SetName: row.SetName,
+			EntryKey: textString(row.EntryKey), HostID: uuidString(row.HostID), Actor: uuidString(row.Actor),
+			At: row.At.Time,
+		})
+	}
+	s.writeResponse(w, auth.ClientPublicKey, views)
+}
+
 // buildSecretSets resolves the host's bound sets and decrypts each entry into a
 // cleartext bundle. Sealing happens once, in secretSetsEnvelope.
 func (s *Server) buildSecretSets(ctx context.Context, host db.Host) (protocol.SecretSets, error) {

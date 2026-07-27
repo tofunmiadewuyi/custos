@@ -244,6 +244,47 @@ func (q *Queries) ListReadableSets(ctx context.Context, userID pgtype.UUID) ([]L
 	return items, nil
 }
 
+const listSetAudit = `-- name: ListSetAudit :many
+select action, set_name, entry_key, host_id, actor, at
+from set_audit_logs where set_name = $1 order by at desc limit 100
+`
+
+type ListSetAuditRow struct {
+	Action   string
+	SetName  string
+	EntryKey pgtype.Text
+	HostID   pgtype.UUID
+	Actor    pgtype.UUID
+	At       pgtype.Timestamptz
+}
+
+func (q *Queries) ListSetAudit(ctx context.Context, setName string) ([]ListSetAuditRow, error) {
+	rows, err := q.db.Query(ctx, listSetAudit, setName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListSetAuditRow{}
+	for rows.Next() {
+		var i ListSetAuditRow
+		if err := rows.Scan(
+			&i.Action,
+			&i.SetName,
+			&i.EntryKey,
+			&i.HostID,
+			&i.Actor,
+			&i.At,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSetKeys = `-- name: ListSetKeys :many
 select key from secret_set_entries where set_id = $1 order by key
 `

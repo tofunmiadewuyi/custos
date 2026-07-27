@@ -56,3 +56,7 @@ delete from secret_sets where id = $1;
 -- name: InsertSetAudit :exec
 insert into set_audit_logs (set_name, entry_key, host_id, action, actor)
 values ($1, $2, $3, $4, $5);
+
+-- name: ListSetAudit :many
+select action, set_name, entry_key, host_id, actor, at
+from set_audit_logs where set_name = $1 order by at desc limit 100;

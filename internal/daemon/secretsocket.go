@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tofunmiadewuyi/custos/internal/protocol"
 )
 
 // DefaultSecretSocket is where the daemon serves secret sets to custosd exec.
@@ -25,18 +27,19 @@ type secretResponse struct {
 }
 
 // ServeSecrets answers set requests on ln until it is closed. The only client is
-// custosd exec: a request is one line naming a set, the reply is JSON.
-func ServeSecrets(ln net.Listener, store *SecretStore) error {
+// custosd exec: a request is one line naming a set, the reply is JSON. onRead, if
+// set, receives every successful serve for machine-read audit.
+func ServeSecrets(ln net.Listener, store *SecretStore, onRead func(protocol.SecretRead)) error {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			return err
 		}
-		go handleSecret(conn, store)
+		go handleSecret(conn, store, onRead)
 	}
 }
 
-func handleSecret(conn net.Conn, store *SecretStore) {
+func handleSecret(conn net.Conn, store *SecretStore, onRead func(protocol.SecretRead)) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
 
@@ -58,6 +61,9 @@ func handleSecret(conn net.Conn, store *SecretStore) {
 		return
 	}
 	writeSecret(conn, secretResponse{OK: true, Values: values})
+	if onRead != nil {
+		onRead(protocol.SecretRead{SetName: name, At: time.Now()})
+	}
 }
 
 func writeSecret(conn net.Conn, resp secretResponse) {

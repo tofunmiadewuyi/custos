@@ -40,9 +40,10 @@ const (
 	TypeSecretSets MessageType = "secret_sets"
 
 	// daemon -> control plane
-	TypeAuth      MessageType = "auth"
-	TypeAccessLog MessageType = "access_log"
-	TypePong      MessageType = "pong"
+	TypeAuth       MessageType = "auth"
+	TypeAccessLog  MessageType = "access_log"
+	TypeSecretRead MessageType = "secret_read"
+	TypePong       MessageType = "pong"
 )
 
 // Envelope is the frame for every websocket message. Data is empty for ping/pong.
@@ -158,6 +159,12 @@ type Grant struct {
 
 type Revoke struct {
 	Fingerprint string `json:"fingerprint"`
+}
+
+// SecretRead reports that a host served a set to a local consumer (custosd exec).
+type SecretRead struct {
+	SetName string    `json:"set_name"`
+	At      time.Time `json:"at"`
 }
 
 // AccessLog reports one login attempt sshd asked about. Sent best-effort; the

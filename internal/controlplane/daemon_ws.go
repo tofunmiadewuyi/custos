@@ -213,13 +213,29 @@ func (s *Server) readDaemon(ctx context.Context, conn *websocket.Conn, host db.H
 		if err != nil {
 			return
 		}
-		if env.Type == protocol.TypeAccessLog {
+		switch env.Type {
+		case protocol.TypeAccessLog:
 			var lg protocol.AccessLog
 			if err := json.Unmarshal(env.Data, &lg); err == nil {
 				s.recordAccessLog(ctx, host, lg)
 			}
+		case protocol.TypeSecretRead:
+			var rd protocol.SecretRead
+			if err := json.Unmarshal(env.Data, &rd); err == nil {
+				s.recordSecretRead(ctx, host, rd)
+			}
 		}
 	}
+}
+
+// recordSecretRead logs a host serving a set to a local consumer, as a machine_read.
+func (s *Server) recordSecretRead(ctx context.Context, host db.Host, rd protocol.SecretRead) {
+	s.q.InsertSetAudit(ctx, db.InsertSetAuditParams{
+		SetName: rd.SetName,
+		HostID:  host.ID,
+		Action:  "machine_read",
+	})
+	s.q.TouchHostSeen(ctx, host.ID)
 }
 
 func (s *Server) recordAccessLog(ctx context.Context, host db.Host, lg protocol.AccessLog) {

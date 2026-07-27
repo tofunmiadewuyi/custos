@@ -65,7 +65,7 @@ func cmdRun(args []string) {
 	secrets := daemon.NewSecretStore(encKey)
 	client := daemon.NewClient(cfg, id, cache, secrets, version, filepath.Join(*dir, "update"))
 	go daemon.ServeAuth(ln, cache, client.RecordAccess)
-	go daemon.ServeSecrets(sln, secrets)
+	go daemon.ServeSecrets(sln, secrets, client.RecordSecretRead)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

@@ -17,7 +17,7 @@ func serveStore(t *testing.T, store *SecretStore) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go ServeSecrets(ln, store)
+	go ServeSecrets(ln, store, nil)
 	t.Cleanup(func() { ln.Close() })
 	return sock
 }

@@ -132,6 +132,10 @@ failed. The daemon logs denials host-side. exec retries the transient "not synce
 `--timeout` (default 30s) so a CP outage at boot waits rather than crash-loops. Injection is atomic
 (whole set or nothing).
 
+**Audit.** A successful serve is reported to the CP over the WS (`TypeSecretRead`) and recorded in
+`set_audit_logs` as a `machine_read` (host + set + time), viewable at `GET /sets/{id}/audit` alongside
+`create`/`edit`/`deliver`/`delete`. Denials are logged host-side on the daemon.
+
 ## Install wiring
 
 - The secrets socket lives in the systemd `RuntimeDirectory` (`/run/custos/secrets.sock`) — the only

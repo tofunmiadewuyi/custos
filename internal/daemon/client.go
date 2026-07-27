@@ -41,6 +41,7 @@ type Client struct {
 	cache     *Cache
 	secrets   *SecretStore
 	logs      chan protocol.AccessLog
+	reads     chan protocol.SecretRead
 	version   string
 	updateDir string
 
@@ -56,6 +57,7 @@ func NewClient(cfg Config, id *identity.KeyPair, cache *Cache, secrets *SecretSt
 		cache:     cache,
 		secrets:   secrets,
 		logs:      make(chan protocol.AccessLog, logBufferSize),
+		reads:     make(chan protocol.SecretRead, logBufferSize),
 		version:   version,
 		updateDir: updateDir,
 		restart:   make(chan struct{}),
@@ -70,6 +72,16 @@ func (c *Client) RecordAccess(entry protocol.AccessLog) {
 	case c.logs <- entry:
 	default:
 		log.Printf("access-log buffer full, dropping entry for %s", entry.Fingerprint)
+	}
+}
+
+// RecordSecretRead queues a machine-read audit entry for delivery. Best-effort,
+// like RecordAccess: a full buffer drops the entry rather than blocking exec.
+func (c *Client) RecordSecretRead(rd protocol.SecretRead) {
+	select {
+	case c.reads <- rd:
+	default:
+		log.Printf("secret-read buffer full, dropping entry for set %s", rd.SetName)
 	}
 }
 
@@ -302,22 +314,28 @@ func (c *Client) writeLoop(ctx context.Context, cancel context.CancelFunc, conn 
 	}
 }
 
+// forwardLogs funnels daemon->CP reports (access logs, secret reads) onto send.
 func (c *Client) forwardLogs(ctx context.Context, send chan protocol.Envelope) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case entry := <-c.logs:
-			env, err := protocol.NewEnvelope(protocol.TypeAccessLog, entry)
-			if err != nil {
-				continue
-			}
-			select {
-			case send <- env:
-			case <-ctx.Done():
-				return
-			}
+			c.forward(ctx, send, protocol.TypeAccessLog, entry)
+		case rd := <-c.reads:
+			c.forward(ctx, send, protocol.TypeSecretRead, rd)
 		}
+	}
+}
+
+func (c *Client) forward(ctx context.Context, send chan protocol.Envelope, t protocol.MessageType, payload any) {
+	env, err := protocol.NewEnvelope(t, payload)
+	if err != nil {
+		return
+	}
+	select {
+	case send <- env:
+	case <-ctx.Done():
 	}
 }
 
