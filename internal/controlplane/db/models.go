@@ -70,6 +70,7 @@ type Host struct {
 	Status         string
 	MachineID      pgtype.Text
 	LastSeq        int64
+	LastSetSeq     int64
 	AgentVersion   string
 	DesiredVersion string
 	EnrolledAt     pgtype.Timestamptz

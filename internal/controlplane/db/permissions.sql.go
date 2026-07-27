@@ -194,6 +194,32 @@ func (q *Queries) UserHasGroupPermission(ctx context.Context, arg UserHasGroupPe
 	return exists, err
 }
 
+const userHasHostPermission = `-- name: UserHasHostPermission :one
+select exists (
+  select 1 from grants g
+  where g.user_id = $1 and g.permission = $2 and g.revoked_at is null
+    and (
+      (g.target_kind = 'host' and g.target_id = $3)
+      or (g.target_kind = 'group' and g.target_id in (
+        select group_id from group_resources
+        where resource_kind = 'host' and resource_id = $3))
+    )
+)
+`
+
+type UserHasHostPermissionParams struct {
+	UserID     pgtype.UUID
+	Permission string
+	HostID     pgtype.UUID
+}
+
+func (q *Queries) UserHasHostPermission(ctx context.Context, arg UserHasHostPermissionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, userHasHostPermission, arg.UserID, arg.Permission, arg.HostID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const userHasSecretPermission = `-- name: UserHasSecretPermission :one
 select exists (
   select 1 from grants g

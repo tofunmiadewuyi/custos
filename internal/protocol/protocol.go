@@ -35,8 +35,9 @@ const (
 	TypeSnapshot  MessageType = "snapshot"
 	TypeGrant     MessageType = "grant"
 	TypeRevoke    MessageType = "revoke"
-	TypePing      MessageType = "ping"
-	TypeUpgrade   MessageType = "upgrade"
+	TypePing       MessageType = "ping"
+	TypeUpgrade    MessageType = "upgrade"
+	TypeSecretSets MessageType = "secret_sets"
 
 	// daemon -> control plane
 	TypeAuth      MessageType = "auth"
@@ -63,12 +64,26 @@ func NewEnvelope(t MessageType, payload any) (Envelope, error) {
 	return Envelope{Type: t, Data: data}, nil
 }
 
-const snapshotSigTag = "custos-snapshot:v1" // domain separation; other signed types get their own tag
+// Domain-separation tags: each signed message type gets its own so a signature
+// for one can never be replayed as another.
+const (
+	snapshotSigTag = "custos-snapshot:v1"
+	setsSigTag     = "custos-sets:v1"
+)
 
 // SnapshotSigningInput builds the signed bytes: tag ‖ len16(hostID) ‖ hostID ‖ seq(8 BE) ‖ data.
 func SnapshotSigningInput(hostID string, seq uint64, data []byte) []byte {
-	buf := make([]byte, 0, len(snapshotSigTag)+2+len(hostID)+8+len(data))
-	buf = append(buf, snapshotSigTag...)
+	return signingInput(snapshotSigTag, hostID, seq, data)
+}
+
+// SecretSetsSigningInput is the same construction as snapshots under the sets tag.
+func SecretSetsSigningInput(hostID string, seq uint64, data []byte) []byte {
+	return signingInput(setsSigTag, hostID, seq, data)
+}
+
+func signingInput(tag, hostID string, seq uint64, data []byte) []byte {
+	buf := make([]byte, 0, len(tag)+2+len(hostID)+8+len(data))
+	buf = append(buf, tag...)
 	var n [8]byte
 	binary.BigEndian.PutUint16(n[:2], uint16(len(hostID)))
 	buf = append(buf, n[:2]...)
@@ -117,6 +132,22 @@ type AccessEntry struct {
 // truth that the incremental Grant/Revoke stream then updates.
 type Snapshot struct {
 	Entries []AccessEntry `json:"entries"`
+}
+
+// SealedSet is one machine-secret set delivered to a host: a hybrid-sealed JSON
+// map {KEY: value} the daemon opens with its X25519 key. AsUser, when set, scopes
+// which unix account the daemon's socket will serve it to. Version bumps on edit.
+type SealedSet struct {
+	Name    string `json:"name"`
+	AsUser  string `json:"as_user,omitempty"`
+	Version uint64 `json:"version"`
+	Sealed  []byte `json:"sealed"`
+}
+
+// SecretSets is the full set of sealed sets bound to a host, sent on connect and
+// on any change; signed and sequenced like a Snapshot but under the sets tag.
+type SecretSets struct {
+	Sets []SealedSet `json:"sets"`
 }
 
 type Grant struct {

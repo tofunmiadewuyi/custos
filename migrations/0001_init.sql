@@ -98,6 +98,8 @@ create table hosts (
   status       text not null default 'active' check (status in ('active', 'revoked')),
   machine_id   text,                          -- app-specific hash of /etc/machine-id; identifies re-enrolls
   last_seq     bigint not null default 0,     -- monotonic per-host counter for signed snapshots (anti-replay)
+  last_set_seq bigint not null default 0,     -- separate monotonic counter for signed secret-set pushes
+
   agent_version   text not null default '',   -- custosd build the daemon last reported
   desired_version text not null default '',   -- upgrade target; pushed on connect while the host is behind
   enrolled_at  timestamptz not null default now(),

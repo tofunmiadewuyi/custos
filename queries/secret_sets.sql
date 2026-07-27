@@ -22,6 +22,28 @@ values ($1, $2, $3, $4, $5);
 -- name: ListSetKeys :many
 select key from secret_set_entries where set_id = $1 order by key;
 
+-- name: GetSetEntries :many
+select key, ciphertext, nonce, wrapped_key from secret_set_entries where set_id = $1 order by key;
+
+-- name: BindSet :exec
+insert into host_set_bindings (host_id, set_id, as_user, granted_by)
+values ($1, $2, $3, $4)
+on conflict (host_id, set_id) do update
+  set as_user = excluded.as_user, granted_by = excluded.granted_by, revoked_at = null;
+
+-- name: UnbindSet :execrows
+delete from host_set_bindings where host_id = $1 and set_id = $2;
+
+-- name: SetsForHost :many
+select ss.id, ss.name, ss.updated_at, hsb.as_user
+from host_set_bindings hsb
+join secret_sets ss on ss.id = hsb.set_id
+where hsb.host_id = $1 and hsb.revoked_at is null
+order by ss.name;
+
+-- name: HostsForSet :many
+select host_id from host_set_bindings where set_id = $1 and revoked_at is null;
+
 -- name: DeleteSetEntries :exec
 delete from secret_set_entries where set_id = $1;
 

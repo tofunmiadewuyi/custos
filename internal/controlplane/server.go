@@ -104,6 +104,8 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/sets/{id}", s.handleGetSet)
 		r.Put("/sets/{id}", s.handleUpdateSet)
 		r.Delete("/sets/{id}", s.handleDeleteSet)
+		r.Post("/hosts/{id}/sets", s.handleBindSet)
+		r.Delete("/hosts/{id}/sets/{setId}", s.handleUnbindSet)
 	})
 
 	r.Group(func(r chi.Router) {

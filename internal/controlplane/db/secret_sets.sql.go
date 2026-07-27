@@ -11,6 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bindSet = `-- name: BindSet :exec
+insert into host_set_bindings (host_id, set_id, as_user, granted_by)
+values ($1, $2, $3, $4)
+on conflict (host_id, set_id) do update
+  set as_user = excluded.as_user, granted_by = excluded.granted_by, revoked_at = null
+`
+
+type BindSetParams struct {
+	HostID    pgtype.UUID
+	SetID     pgtype.UUID
+	AsUser    pgtype.Text
+	GrantedBy pgtype.UUID
+}
+
+func (q *Queries) BindSet(ctx context.Context, arg BindSetParams) error {
+	_, err := q.db.Exec(ctx, bindSet,
+		arg.HostID,
+		arg.SetID,
+		arg.AsUser,
+		arg.GrantedBy,
+	)
+	return err
+}
+
 const createSet = `-- name: CreateSet :one
 insert into secret_sets (name, created_by) values ($1, $2) returning id, name, created_by, created_at, updated_at
 `
@@ -93,6 +117,66 @@ func (q *Queries) GetSet(ctx context.Context, id pgtype.UUID) (SecretSet, error)
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getSetEntries = `-- name: GetSetEntries :many
+select key, ciphertext, nonce, wrapped_key from secret_set_entries where set_id = $1 order by key
+`
+
+type GetSetEntriesRow struct {
+	Key        string
+	Ciphertext []byte
+	Nonce      []byte
+	WrappedKey []byte
+}
+
+func (q *Queries) GetSetEntries(ctx context.Context, setID pgtype.UUID) ([]GetSetEntriesRow, error) {
+	rows, err := q.db.Query(ctx, getSetEntries, setID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetSetEntriesRow{}
+	for rows.Next() {
+		var i GetSetEntriesRow
+		if err := rows.Scan(
+			&i.Key,
+			&i.Ciphertext,
+			&i.Nonce,
+			&i.WrappedKey,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const hostsForSet = `-- name: HostsForSet :many
+select host_id from host_set_bindings where set_id = $1 and revoked_at is null
+`
+
+func (q *Queries) HostsForSet(ctx context.Context, setID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, hostsForSet, setID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var host_id pgtype.UUID
+		if err := rows.Scan(&host_id); err != nil {
+			return nil, err
+		}
+		items = append(items, host_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertSetAudit = `-- name: InsertSetAudit :exec
@@ -220,6 +304,46 @@ func (q *Queries) ListSets(ctx context.Context) ([]ListSetsRow, error) {
 	return items, nil
 }
 
+const setsForHost = `-- name: SetsForHost :many
+select ss.id, ss.name, ss.updated_at, hsb.as_user
+from host_set_bindings hsb
+join secret_sets ss on ss.id = hsb.set_id
+where hsb.host_id = $1 and hsb.revoked_at is null
+order by ss.name
+`
+
+type SetsForHostRow struct {
+	ID        pgtype.UUID
+	Name      string
+	UpdatedAt pgtype.Timestamptz
+	AsUser    pgtype.Text
+}
+
+func (q *Queries) SetsForHost(ctx context.Context, hostID pgtype.UUID) ([]SetsForHostRow, error) {
+	rows, err := q.db.Query(ctx, setsForHost, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SetsForHostRow{}
+	for rows.Next() {
+		var i SetsForHostRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.UpdatedAt,
+			&i.AsUser,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const touchSet = `-- name: TouchSet :exec
 update secret_sets set updated_at = now() where id = $1
 `
@@ -227,4 +351,21 @@ update secret_sets set updated_at = now() where id = $1
 func (q *Queries) TouchSet(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, touchSet, id)
 	return err
+}
+
+const unbindSet = `-- name: UnbindSet :execrows
+delete from host_set_bindings where host_id = $1 and set_id = $2
+`
+
+type UnbindSetParams struct {
+	HostID pgtype.UUID
+	SetID  pgtype.UUID
+}
+
+func (q *Queries) UnbindSet(ctx context.Context, arg UnbindSetParams) (int64, error) {
+	result, err := q.db.Exec(ctx, unbindSet, arg.HostID, arg.SetID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

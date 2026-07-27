@@ -14,7 +14,7 @@ import (
 const createHost = `-- name: CreateHost :one
 insert into hosts (name, hostname, identity_key, accounts, machine_id, encryption_key)
 values ($1, $2, $3, $4, $5, $6)
-returning id, name, hostname, identity_key, encryption_key, accounts, status, machine_id, last_seq, agent_version, desired_version, enrolled_at, last_seen_at
+returning id, name, hostname, identity_key, encryption_key, accounts, status, machine_id, last_seq, last_set_seq, agent_version, desired_version, enrolled_at, last_seen_at
 `
 
 type CreateHostParams struct {
@@ -46,6 +46,7 @@ func (q *Queries) CreateHost(ctx context.Context, arg CreateHostParams) (Host, e
 		&i.Status,
 		&i.MachineID,
 		&i.LastSeq,
+		&i.LastSetSeq,
 		&i.AgentVersion,
 		&i.DesiredVersion,
 		&i.EnrolledAt,
@@ -55,7 +56,7 @@ func (q *Queries) CreateHost(ctx context.Context, arg CreateHostParams) (Host, e
 }
 
 const getActiveHostByMachineID = `-- name: GetActiveHostByMachineID :one
-select id, name, hostname, identity_key, encryption_key, accounts, status, machine_id, last_seq, agent_version, desired_version, enrolled_at, last_seen_at from hosts where machine_id = $1 and status = 'active'
+select id, name, hostname, identity_key, encryption_key, accounts, status, machine_id, last_seq, last_set_seq, agent_version, desired_version, enrolled_at, last_seen_at from hosts where machine_id = $1 and status = 'active'
 `
 
 func (q *Queries) GetActiveHostByMachineID(ctx context.Context, machineID pgtype.Text) (Host, error) {
@@ -71,6 +72,7 @@ func (q *Queries) GetActiveHostByMachineID(ctx context.Context, machineID pgtype
 		&i.Status,
 		&i.MachineID,
 		&i.LastSeq,
+		&i.LastSetSeq,
 		&i.AgentVersion,
 		&i.DesiredVersion,
 		&i.EnrolledAt,
@@ -80,7 +82,7 @@ func (q *Queries) GetActiveHostByMachineID(ctx context.Context, machineID pgtype
 }
 
 const getHostByID = `-- name: GetHostByID :one
-select id, name, hostname, identity_key, encryption_key, accounts, status, machine_id, last_seq, agent_version, desired_version, enrolled_at, last_seen_at from hosts where id = $1
+select id, name, hostname, identity_key, encryption_key, accounts, status, machine_id, last_seq, last_set_seq, agent_version, desired_version, enrolled_at, last_seen_at from hosts where id = $1
 `
 
 func (q *Queries) GetHostByID(ctx context.Context, id pgtype.UUID) (Host, error) {
@@ -96,6 +98,7 @@ func (q *Queries) GetHostByID(ctx context.Context, id pgtype.UUID) (Host, error)
 		&i.Status,
 		&i.MachineID,
 		&i.LastSeq,
+		&i.LastSetSeq,
 		&i.AgentVersion,
 		&i.DesiredVersion,
 		&i.EnrolledAt,
@@ -199,6 +202,17 @@ func (q *Queries) NextHostSeq(ctx context.Context, id pgtype.UUID) (int64, error
 	var last_seq int64
 	err := row.Scan(&last_seq)
 	return last_seq, err
+}
+
+const nextHostSetSeq = `-- name: NextHostSetSeq :one
+update hosts set last_set_seq = last_set_seq + 1 where id = $1 returning last_set_seq
+`
+
+func (q *Queries) NextHostSetSeq(ctx context.Context, id pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, nextHostSetSeq, id)
+	var last_set_seq int64
+	err := row.Scan(&last_set_seq)
+	return last_set_seq, err
 }
 
 const setHostDesiredVersion = `-- name: SetHostDesiredVersion :exec

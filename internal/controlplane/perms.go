@@ -32,6 +32,18 @@ func (s *Server) canSecret(ctx context.Context, a authInfo, permission string, s
 	return err == nil && ok
 }
 
+// canHost reports whether the user holds permission on a specific host, directly
+// or via a group. Admins bypass grants.
+func (s *Server) canHost(ctx context.Context, a authInfo, permission string, hostID pgtype.UUID) bool {
+	if a.Role == "admin" {
+		return true
+	}
+	ok, err := s.q.UserHasHostPermission(ctx, db.UserHasHostPermissionParams{
+		UserID: a.UserID, Permission: permission, HostID: hostID,
+	})
+	return err == nil && ok
+}
+
 // canGroup reports whether the user holds permission on a specific group. Admins bypass.
 func (s *Server) canGroup(ctx context.Context, a authInfo, permission string, groupID pgtype.UUID) bool {
 	if a.Role == "admin" {

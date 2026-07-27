@@ -54,6 +54,13 @@ func (s *Server) handleDaemon(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// sealed secret sets bound to this host, reconciled on every connect
+	if sets, err := s.buildSecretSets(ctx, host); err == nil {
+		if env, err := s.secretSetsEnvelope(ctx, host.ID, sets); err == nil {
+			send <- env
+		}
+	}
+
 	// A host still behind its desired version gets the upgrade re-pushed on connect.
 	if host.DesiredVersion != "" && host.DesiredVersion != host.AgentVersion {
 		if up, err := s.buildUpgrade(ctx, host.DesiredVersion); err == nil {

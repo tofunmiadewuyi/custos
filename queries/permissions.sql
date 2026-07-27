@@ -46,6 +46,18 @@ select exists (
     and target_kind = 'group' and target_id = @group_id
 );
 
+-- name: UserHasHostPermission :one
+select exists (
+  select 1 from grants g
+  where g.user_id = @user_id and g.permission = @permission and g.revoked_at is null
+    and (
+      (g.target_kind = 'host' and g.target_id = @host_id)
+      or (g.target_kind = 'group' and g.target_id in (
+        select group_id from group_resources
+        where resource_kind = 'host' and resource_id = @host_id))
+    )
+);
+
 -- name: UserHasSetPermission :one
 select exists (
   select 1 from grants

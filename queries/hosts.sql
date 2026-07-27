@@ -24,6 +24,9 @@ update hosts set desired_version = $2 where id = $1;
 -- name: NextHostSeq :one
 update hosts set last_seq = last_seq + 1 where id = $1 returning last_seq;
 
+-- name: NextHostSetSeq :one
+update hosts set last_set_seq = last_set_seq + 1 where id = $1 returning last_set_seq;
+
 -- name: ListHosts :many
 select id, name, hostname, accounts, status, agent_version, desired_version, enrolled_at, last_seen_at
 from hosts order by name;
