@@ -6,13 +6,13 @@ import (
 )
 
 func TestSealOpenRoundTrip(t *testing.T) {
-	priv, pub, err := GenerateKeyPair()
+	kp, err := GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
 	plaintext := []byte("the launch codes")
 
-	sealed, err := Seal(pub, plaintext)
+	sealed, err := Seal(kp.Public(), plaintext)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +20,7 @@ func TestSealOpenRoundTrip(t *testing.T) {
 		t.Fatal("plaintext leaked into sealed message")
 	}
 
-	got, err := Open(priv, sealed)
+	got, err := kp.Open(sealed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,27 +30,27 @@ func TestSealOpenRoundTrip(t *testing.T) {
 }
 
 func TestOpenRejectsWrongKey(t *testing.T) {
-	_, pub, _ := GenerateKeyPair()
-	wrongPriv, _, _ := GenerateKeyPair()
+	kp, _ := GenerateKeyPair()
+	wrong, _ := GenerateKeyPair()
 
-	sealed, err := Seal(pub, []byte("the launch codes"))
+	sealed, err := Seal(kp.Public(), []byte("the launch codes"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(wrongPriv, sealed); err == nil {
+	if _, err := wrong.Open(sealed); err == nil {
 		t.Fatal("expected decryption to fail with the wrong private key")
 	}
 }
 
 func TestOpenRejectsTamperedMessage(t *testing.T) {
-	priv, pub, _ := GenerateKeyPair()
-	sealed, err := Seal(pub, []byte("the launch codes"))
+	kp, _ := GenerateKeyPair()
+	sealed, err := Seal(kp.Public(), []byte("the launch codes"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	sealed[len(sealed)-1] ^= 0xff
-	if _, err := Open(priv, sealed); err == nil {
+	if _, err := kp.Open(sealed); err == nil {
 		t.Fatal("expected decryption to fail on a tampered message")
 	}
 }

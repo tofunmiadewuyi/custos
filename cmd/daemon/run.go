@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/tofunmiadewuyi/custos/internal/daemon"
@@ -44,14 +46,19 @@ func cmdRun(args []string) {
 	}
 	defer ln.Close()
 
-	client := daemon.NewClient(cfg, id, cache)
+	client := daemon.NewClient(cfg, id, cache, version, filepath.Join(*dir, "update"))
 	go daemon.ServeAuth(ln, cache, client.RecordAccess)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	log.Printf("custosd running: host %s, %d keys cached", cfg.HostID, cache.Len())
-	if err := client.Run(ctx); err != nil && ctx.Err() == nil {
+	err = client.Run(ctx)
+	if errors.Is(err, daemon.ErrRestart) {
+		log.Print("exiting to apply staged upgrade; systemd will restart")
+		return // exit 0; ExecStartPre applies the staged binary on restart
+	}
+	if err != nil && ctx.Err() == nil {
 		fatal("run: %v", err)
 	}
 }

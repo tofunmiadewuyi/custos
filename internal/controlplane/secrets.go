@@ -85,7 +85,15 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not seal secret", err)
 		return
 	}
-	secret, err := s.q.CreateSecret(r.Context(), db.CreateSecretParams{
+	tx, err := s.pool.Begin(r.Context())
+	if err != nil {
+		serverError(w, "could not create secret", err)
+		return
+	}
+	defer tx.Rollback(r.Context())
+	q := db.New(tx)
+
+	secret, err := q.CreateSecret(r.Context(), db.CreateSecretParams{
 		Label:        req.Label,
 		Url:          pgText(req.URL),
 		Username:     pgText(req.Username),
@@ -100,7 +108,20 @@ func (s *Server) handleCreateSecret(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not create secret", err)
 		return
 	}
-	s.auditSecret(r.Context(), secret.ID, secret.Label, "add", auth.UserID)
+	if err := q.InsertSecretAudit(r.Context(), db.InsertSecretAuditParams{
+		SecretID: secret.ID, SecretName: secret.Label, Action: "add", UserID: auth.UserID,
+	}); err != nil {
+		serverError(w, "could not create secret", err)
+		return
+	}
+	if err := s.grantOwner(r.Context(), q, auth.UserID, "secret", secret.ID, "secret.read", "secret.update", "secret.delete"); err != nil {
+		serverError(w, "could not create secret", err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		serverError(w, "could not create secret", err)
+		return
+	}
 	s.respondSecret(w, r, auth, secret.ID)
 }
 

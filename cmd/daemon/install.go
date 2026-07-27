@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
 
 	"github.com/tofunmiadewuyi/custos/internal/daemon"
@@ -32,6 +33,9 @@ Type=simple
 User=custos
 Group=custos
 RuntimeDirectory=custos
+# '+' runs this as root even though the service is User=custos: it swaps in a
+# daemon-staged binary before start. No-op when nothing is staged.
+ExecStartPre=+/usr/local/bin/custosd apply-update --dir /var/lib/custos
 ExecStart=/usr/local/bin/custosd run --dir /var/lib/custos --socket /run/custos/custosd.sock
 Restart=always
 RestartSec=5
@@ -107,11 +111,14 @@ func installBinary(self string) {
 }
 
 func makeStateDir(uid, gid int) {
-	if err := os.MkdirAll(installStateDir, 0o700); err != nil {
-		fatal("install: create %s: %v", installStateDir, err)
-	}
-	if err := os.Chown(installStateDir, uid, gid); err != nil {
-		fatal("install: chown %s: %v", installStateDir, err)
+	updateDir := filepath.Join(installStateDir, "update")
+	for _, d := range []string{installStateDir, updateDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			fatal("install: create %s: %v", d, err)
+		}
+		if err := os.Chown(d, uid, gid); err != nil {
+			fatal("install: chown %s: %v", d, err)
+		}
 	}
 }
 

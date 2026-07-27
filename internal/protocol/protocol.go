@@ -14,10 +14,11 @@ import (
 // every later websocket connection is authenticated by signing a challenge
 // with the matching private key.
 type EnrollRequest struct {
-	Token     string `json:"token"` // admin-issued, single-use
-	Hostname  string `json:"hostname"`
-	PublicKey string `json:"public_key"` // daemon identity, base64
-	MachineID string `json:"machine_id"` // app-specific hash of /etc/machine-id; empty if unavailable
+	Token         string `json:"token"` // admin-issued, single-use
+	Hostname      string `json:"hostname"`
+	PublicKey     string `json:"public_key"`     // daemon identity (ed25519, signing), base64
+	EncryptionKey string `json:"encryption_key"` // daemon X25519 public key for sealed secrets, base64
+	MachineID     string `json:"machine_id"`     // app-specific hash of /etc/machine-id; empty if unavailable
 }
 
 type EnrollResponse struct {
@@ -35,6 +36,7 @@ const (
 	TypeGrant     MessageType = "grant"
 	TypeRevoke    MessageType = "revoke"
 	TypePing      MessageType = "ping"
+	TypeUpgrade   MessageType = "upgrade"
 
 	// daemon -> control plane
 	TypeAuth      MessageType = "auth"
@@ -84,10 +86,18 @@ type Challenge struct {
 }
 
 // Auth answers a Challenge: the daemon names itself and returns its signature
-// over the nonce. The control plane verifies it against the host's stored key.
+// over the nonce. Version lets the control plane track drift + dedupe upgrades.
 type Auth struct {
 	HostID    string `json:"host_id"`
 	Signature []byte `json:"signature"`
+	Version   string `json:"version,omitempty"`
+}
+
+// Upgrade tells the daemon to fetch, verify, stage, and restart into a new build.
+// SHA256 maps GOARCH -> tarball digest; supplied by the control plane = the trust anchor.
+type Upgrade struct {
+	Version string            `json:"version"`
+	SHA256  map[string]string `json:"sha256"`
 }
 
 // AccessEntry is one authorized key on a server: enough to match the key sshd

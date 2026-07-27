@@ -97,7 +97,7 @@ func TestClientProtocol(t *testing.T) {
 
 	store, _ := OpenStore(t.TempDir())
 	cache, _ := store.LoadCache()
-	client := NewClient(Config{ControlPlane: srv.URL, HostID: "host-1"}, id, cache)
+	client := NewClient(Config{ControlPlane: srv.URL, HostID: "host-1"}, id, cache, "v0.0.0", t.TempDir())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

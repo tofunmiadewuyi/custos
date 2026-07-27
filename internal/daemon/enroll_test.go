@@ -19,7 +19,7 @@ func TestEnroll(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		if req.Token != "tok" || req.PublicKey == "" {
+		if req.Token != "tok" || req.PublicKey == "" || req.EncryptionKey == "" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -50,6 +50,9 @@ func TestEnroll(t *testing.T) {
 	}
 	if _, err := store.LoadIdentity(); err != nil {
 		t.Fatalf("identity should load: %v", err)
+	}
+	if _, err := store.LoadEncryptionKey(); err != nil {
+		t.Fatalf("encryption key should load: %v", err)
 	}
 
 	// Second enrollment must be refused.

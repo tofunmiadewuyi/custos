@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,6 +28,9 @@ type Server struct {
 	signer  *identity.KeyPair
 	email   email.Sender
 	authRL  *rateLimiter
+
+	checksumMu sync.Mutex
+	checksums  map[string]map[string]string // version -> arch -> tarball digest
 }
 
 func NewServer(cfg Config, pool *pgxpool.Pool) *Server {
@@ -35,8 +39,9 @@ func NewServer(cfg Config, pool *pgxpool.Pool) *Server {
 		pool:   pool,
 		q:      db.New(pool),
 		hub:    newHub(),
-		email:  email.New(cfg.ResendAPIKey, cfg.EmailFrom),
-		authRL: newRateLimiter(rate.Every(6*time.Second), 10), // ~10/min per IP, burst 10
+		email:     email.New(cfg.ResendAPIKey, cfg.EmailFrom),
+		authRL:    newRateLimiter(rate.Every(6*time.Second), 10), // ~10/min per IP, burst 10
+		checksums: map[string]map[string]string{},
 	}
 	if w, err := vault.NewAESWrapper(cfg.MasterKey); err == nil {
 		s.wrapper = w
@@ -73,9 +78,11 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/me", s.handleMe)
 		r.Patch("/me", s.handleUpdateProfile)
 		r.Post("/logout", s.handleLogout)
+
 		r.Post("/keys", s.handleAddKey)
 		r.Get("/keys", s.handleListKeys)
 		r.Delete("/keys/{id}", s.handleDeleteKey)
+
 		r.Post("/secrets", s.handleCreateSecret)
 		r.Get("/secrets", s.handleListSecrets)
 		r.Get("/secrets/{id}", s.handleGetSecret)
@@ -83,6 +90,20 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/secrets/{id}/audit", s.handleSecretAudit)
 		r.Put("/secrets/{id}", s.handleUpdateSecret)
 		r.Delete("/secrets/{id}", s.handleDeleteSecret)
+
+		// Groups and sets self-gate per-handler via grants (canGlobal/canGroup/canSet).
+		r.Post("/groups", s.handleCreateGroup)
+		r.Get("/groups", s.handleListGroups)
+		r.Get("/groups/{id}", s.handleGetGroup)
+		r.Delete("/groups/{id}", s.handleDeleteGroup)
+		r.Post("/groups/{id}/resources", s.handleAddGroupResource)
+		r.Delete("/groups/{id}/resources", s.handleRemoveGroupResource)
+
+		r.Post("/sets", s.handleCreateSet)
+		r.Get("/sets", s.handleListSets)
+		r.Get("/sets/{id}", s.handleGetSet)
+		r.Put("/sets/{id}", s.handleUpdateSet)
+		r.Delete("/sets/{id}", s.handleDeleteSet)
 	})
 
 	r.Group(func(r chi.Router) {
@@ -90,6 +111,8 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/enroll-tokens", s.handleCreateEnrollToken)
 		r.Get("/hosts", s.handleListHosts)
 		r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
+		r.Post("/hosts/{id}/upgrade", s.handleUpgradeHost)
+		r.Post("/upgrade", s.handleUpgradeFleet)
 		r.Get("/audit", s.handleAllAudit)
 		r.Get("/grant-audit", s.handleGrantAudit)
 
@@ -102,13 +125,6 @@ func (s *Server) Handler() http.Handler {
 		r.Get("/invitations", s.handleListInvitations)
 		r.Delete("/invitations/{id}", s.handleCancelInvitation)
 		r.Post("/invitations/{id}/resend", s.handleResendInvitation)
-
-		r.Post("/groups", s.handleCreateGroup)
-		r.Get("/groups", s.handleListGroups)
-		r.Get("/groups/{id}", s.handleGetGroup)
-		r.Delete("/groups/{id}", s.handleDeleteGroup)
-		r.Post("/groups/{id}/resources", s.handleAddGroupResource)
-		r.Delete("/groups/{id}/resources", s.handleRemoveGroupResource)
 
 		r.Get("/grants", s.handleListGrants)
 		r.Post("/grants", s.handleCreateGrant)

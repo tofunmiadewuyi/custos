@@ -31,3 +31,25 @@ func (s *Server) canSecret(ctx context.Context, a authInfo, permission string, s
 	})
 	return err == nil && ok
 }
+
+// canGroup reports whether the user holds permission on a specific group. Admins bypass.
+func (s *Server) canGroup(ctx context.Context, a authInfo, permission string, groupID pgtype.UUID) bool {
+	if a.Role == "admin" {
+		return true
+	}
+	ok, err := s.q.UserHasGroupPermission(ctx, db.UserHasGroupPermissionParams{
+		UserID: a.UserID, Permission: permission, GroupID: groupID,
+	})
+	return err == nil && ok
+}
+
+// canSet reports whether the user holds permission on a specific set. Admins bypass.
+func (s *Server) canSet(ctx context.Context, a authInfo, permission string, setID pgtype.UUID) bool {
+	if a.Role == "admin" {
+		return true
+	}
+	ok, err := s.q.UserHasSetPermission(ctx, db.UserHasSetPermissionParams{
+		UserID: a.UserID, Permission: permission, SetID: setID,
+	})
+	return err == nil && ok
+}

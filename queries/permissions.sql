@@ -39,6 +39,20 @@ where g.revoked_at is null
   )
 order by rg.name, u.email;
 
+-- name: UserHasGroupPermission :one
+select exists (
+  select 1 from grants
+  where user_id = @user_id and permission = @permission and revoked_at is null
+    and target_kind = 'group' and target_id = @group_id
+);
+
+-- name: UserHasSetPermission :one
+select exists (
+  select 1 from grants
+  where user_id = @user_id and permission = @permission and revoked_at is null
+    and target_kind = 'set' and target_id = @set_id
+);
+
 -- name: ListActiveAdmins :many
 select id as user_id, email, name, status from users
 where role = 'admin' and status = 'active'

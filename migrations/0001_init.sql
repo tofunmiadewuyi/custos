@@ -93,10 +93,13 @@ create table hosts (
   name         text not null,
   hostname     text not null,
   identity_key text not null unique,          -- daemon's ed25519 public key, from enrollment
+  encryption_key text not null default '',    -- daemon's x25519 public key, for sealed secret sets
   accounts     text[] not null default '{}',  -- unix accounts custos manages on this host
   status       text not null default 'active' check (status in ('active', 'revoked')),
   machine_id   text,                          -- app-specific hash of /etc/machine-id; identifies re-enrolls
   last_seq     bigint not null default 0,     -- monotonic per-host counter for signed snapshots (anti-replay)
+  agent_version   text not null default '',   -- custosd build the daemon last reported
+  desired_version text not null default '',   -- upgrade target; pushed on connect while the host is behind
   enrolled_at  timestamptz not null default now(),
   last_seen_at timestamptz
 );
@@ -164,7 +167,7 @@ create table grants (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references users(id) on delete cascade,
   permission  text not null references permissions(key),
-  target_kind text not null check (target_kind in ('secret', 'host', 'group', 'global')),
+  target_kind text not null check (target_kind in ('secret', 'host', 'group', 'set', 'global')),
   target_id   uuid,                            -- null iff global
   granted_by  uuid references users(id),
   created_at  timestamptz not null default now(),
@@ -173,6 +176,40 @@ create table grants (
 );
 create index on grants (user_id) where revoked_at is null;
 create index on grants (target_kind, target_id) where revoked_at is null;
+
+-- ── Machine secrets ─────────────────────────────────────────────────────────
+-- A set is one app's .env; entries are individually sealed; bindings deliver a set to a host.
+
+create table secret_sets (
+  id         uuid primary key default gen_random_uuid(),
+  name       text not null unique,           -- org-scoped, human-referenced
+  created_by uuid references users(id),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table secret_set_entries (
+  set_id      uuid not null references secret_sets(id) on delete cascade,
+  key         text not null,                 -- env var name, e.g. MASTER_KEY
+  ciphertext  bytea not null,                -- vault-sealed value
+  nonce       bytea not null,
+  wrapped_key bytea not null,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now(),
+  primary key (set_id, key)                  -- keys unique within a set
+);
+
+-- Deliver a set to a host; as_user opt-in scopes it to a unix service account.
+create table host_set_bindings (
+  host_id    uuid not null references hosts(id) on delete cascade,
+  set_id     uuid not null references secret_sets(id) on delete cascade,
+  as_user    text,                           -- null = single-tenant, any local caller
+  granted_by uuid references users(id),
+  created_at timestamptz not null default now(),
+  revoked_at timestamptz,
+  primary key (host_id, set_id)
+);
+create index on host_set_bindings (set_id);
 
 -- ── Audit (append-only) ─────────────────────────────────────────────────────
 -- Audit tables carry NO foreign keys: an FK is a mutation path (cascade wipes,
@@ -219,6 +256,18 @@ create table grant_audit_logs (
 create index on grant_audit_logs (subject_id, at);
 create index on grant_audit_logs (grant_id, at);
 
+-- Immutable trail of set edits and machine deliveries/reads.
+create table set_audit_logs (
+  id        uuid primary key default gen_random_uuid(),
+  set_name  text not null,                   -- denormalized: survives deletion
+  entry_key text,                            -- null for whole-set actions
+  host_id   uuid,                            -- who consumed it (machine actions)
+  action    text not null check (action in ('create', 'edit', 'deliver', 'machine_read', 'delete')),
+  actor     uuid,                            -- historical ref, no FK
+  at        timestamptz not null default now()
+);
+create index on set_audit_logs (at);
+
 -- +goose StatementBegin
 create or replace function reject_audit_mutation() returns trigger
 language plpgsql as $$
@@ -243,22 +292,35 @@ create trigger no_mutate before update or delete on grant_audit_logs
 create trigger no_truncate before truncate on grant_audit_logs
   execute function reject_audit_mutation();
 
+create trigger no_mutate before update or delete on set_audit_logs
+  for each row execute function reject_audit_mutation();
+create trigger no_truncate before truncate on set_audit_logs
+  execute function reject_audit_mutation();
+
 -- ── Seed data ───────────────────────────────────────────────────────────────
 
 insert into permissions (key, description) values
   ('secret.add',    'Create secrets'),                              -- global
   ('group.create',  'Create resource groups'),                     -- global
+  ('set.add',       'Create machine secret sets'),                 -- global
   ('secret.read',   'View a secret value'),                        -- scoped
   ('secret.update', 'Modify secrets'),                             -- scoped
   ('secret.delete', 'Delete secrets'),                             -- scoped
   ('host.access',   'SSH access to a host'),                       -- scoped
-  ('group.manage',  'Rename, delete, or change membership of a group'); -- scoped
+  ('group.read',    'View a group and its members'),              -- scoped
+  ('group.manage',  'Rename, delete, or change membership of a group'), -- scoped
+  ('set.read',      'View a set and its keys'),                    -- scoped
+  ('set.manage',    'Edit, delete, or bind a set'); -- scoped
 
 -- +goose Down
+drop table if exists set_audit_logs cascade;
 drop table if exists grant_audit_logs cascade;
 drop table if exists ssh_access_logs cascade;
 drop table if exists secret_audit_logs cascade;
 drop function if exists reject_audit_mutation();
+drop table if exists host_set_bindings cascade;
+drop table if exists secret_set_entries cascade;
+drop table if exists secret_sets cascade;
 drop table if exists grants cascade;
 drop table if exists permissions cascade;
 drop table if exists group_resources cascade;

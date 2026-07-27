@@ -7,15 +7,17 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tofunmiadewuyi/custos/internal/hybrid"
 	"github.com/tofunmiadewuyi/custos/internal/identity"
 )
 
 const (
 	DefaultDir = "/var/lib/custos"
 
-	configFile   = "config.json"
-	identityFile = "identity.key"
-	cacheFile    = "cache.json"
+	configFile     = "config.json"
+	identityFile   = "identity.key"
+	encryptionFile = "encryption.key"
+	cacheFile      = "cache.json"
 )
 
 // Config is the daemon's persisted settings, written at enrollment.
@@ -74,6 +76,19 @@ func (s *Store) LoadIdentity() (*identity.KeyPair, error) {
 
 func (s *Store) SaveIdentity(kp *identity.KeyPair) error {
 	return atomicWrite(s.path(identityFile), []byte(kp.PrivateKey()), 0o600)
+}
+
+// SaveEncryptionKey persists the daemon's X25519 keypair for sealed secret sets.
+func (s *Store) SaveEncryptionKey(kp *hybrid.KeyPair) error {
+	return atomicWrite(s.path(encryptionFile), []byte(kp.PrivateKey()), 0o600)
+}
+
+func (s *Store) LoadEncryptionKey() (*hybrid.KeyPair, error) {
+	data, err := os.ReadFile(s.path(encryptionFile))
+	if err != nil {
+		return nil, err
+	}
+	return hybrid.LoadKeyPair(string(data))
 }
 
 func (s *Store) path(name string) string {

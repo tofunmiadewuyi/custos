@@ -75,6 +75,19 @@ func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 	s.writeResponse(w, auth.ClientPublicKey, map[string]string{"id": uuidString(grant.ID)})
 }
 
+// grantOwner gives the creator full scoped access to a resource they just made,
+// so members own what they create. Runs inside the create tx; self-granted.
+func (s *Server) grantOwner(ctx context.Context, q *db.Queries, userID pgtype.UUID, kind string, targetID pgtype.UUID, perms ...string) error {
+	for _, p := range perms {
+		if _, err := q.CreateGrant(ctx, db.CreateGrantParams{
+			UserID: userID, Permission: p, TargetKind: kind, TargetID: targetID, GrantedBy: userID,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
 	grantID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {

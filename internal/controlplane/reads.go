@@ -81,13 +81,15 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 type hostView struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Hostname   string     `json:"hostname"`
-	Accounts   []string   `json:"accounts"`
-	Status     string     `json:"status"`
-	EnrolledAt time.Time  `json:"enrolled_at"`
-	LastSeenAt *time.Time `json:"last_seen_at"`
+	ID             string     `json:"id"`
+	Name           string     `json:"name"`
+	Hostname       string     `json:"hostname"`
+	Accounts       []string   `json:"accounts"`
+	Status         string     `json:"status"`
+	AgentVersion   string     `json:"agent_version"`
+	DesiredVersion string     `json:"desired_version"`
+	EnrolledAt     time.Time  `json:"enrolled_at"`
+	LastSeenAt     *time.Time `json:"last_seen_at"`
 }
 
 func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
@@ -99,13 +101,15 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 	views := make([]hostView, 0, len(rows))
 	for _, h := range rows {
 		views = append(views, hostView{
-			ID:         uuidString(h.ID),
-			Name:       h.Name,
-			Hostname:   h.Hostname,
-			Accounts:   h.Accounts,
-			Status:     h.Status,
-			EnrolledAt: h.EnrolledAt.Time,
-			LastSeenAt: nullTime(h.LastSeenAt),
+			ID:             uuidString(h.ID),
+			Name:           h.Name,
+			Hostname:       h.Hostname,
+			Accounts:       h.Accounts,
+			Status:         h.Status,
+			AgentVersion:   h.AgentVersion,
+			DesiredVersion: h.DesiredVersion,
+			EnrolledAt:     h.EnrolledAt.Time,
+			LastSeenAt:     nullTime(h.LastSeenAt),
 		})
 	}
 	s.writeResponse(w, authFrom(r.Context()).ClientPublicKey, views)

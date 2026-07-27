@@ -137,6 +137,40 @@ func (q *Queries) ListGroups(ctx context.Context) ([]ResourceGroup, error) {
 	return items, nil
 }
 
+const listReadableGroups = `-- name: ListReadableGroups :many
+select distinct rg.id, rg.name, rg.description, rg.created_at
+from resource_groups rg
+join grants g on g.permission = 'group.read' and g.revoked_at is null
+  and g.target_kind = 'group' and g.target_id = rg.id
+where g.user_id = $1
+order by rg.name
+`
+
+func (q *Queries) ListReadableGroups(ctx context.Context, userID pgtype.UUID) ([]ResourceGroup, error) {
+	rows, err := q.db.Query(ctx, listReadableGroups, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResourceGroup{}
+	for rows.Next() {
+		var i ResourceGroup
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const removeGroupResource = `-- name: RemoveGroupResource :execrows
 delete from group_resources
 where group_id = $1 and resource_kind = $2 and resource_id = $3

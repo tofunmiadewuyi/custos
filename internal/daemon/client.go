@@ -3,10 +3,13 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand/v2"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -15,6 +18,10 @@ import (
 	"github.com/tofunmiadewuyi/custos/internal/identity"
 	"github.com/tofunmiadewuyi/custos/internal/protocol"
 )
+
+// ErrRestart is returned by Run when an upgrade has been staged and the process
+// should exit so systemd restarts it into the new binary.
+var ErrRestart = errors.New("restart to apply staged upgrade")
 
 const (
 	readTimeout   = 60 * time.Second // no message (incl. server ping) in this window ⇒ dead link
@@ -29,18 +36,27 @@ const (
 // authenticates, reconciles the cache from the authoritative snapshot, applies
 // the grant/revoke stream, and forwards access logs.
 type Client struct {
-	cfg      Config
-	identity *identity.KeyPair
-	cache    *Cache
-	logs     chan protocol.AccessLog
+	cfg       Config
+	identity  *identity.KeyPair
+	cache     *Cache
+	logs      chan protocol.AccessLog
+	version   string
+	updateDir string
+
+	restart     chan struct{} // closed once an upgrade is staged and ready
+	restartOnce sync.Once
+	upgrading   atomic.Bool
 }
 
-func NewClient(cfg Config, id *identity.KeyPair, cache *Cache) *Client {
+func NewClient(cfg Config, id *identity.KeyPair, cache *Cache, version, updateDir string) *Client {
 	return &Client{
-		cfg:      cfg,
-		identity: id,
-		cache:    cache,
-		logs:     make(chan protocol.AccessLog, logBufferSize),
+		cfg:       cfg,
+		identity:  id,
+		cache:     cache,
+		logs:      make(chan protocol.AccessLog, logBufferSize),
+		version:   version,
+		updateDir: updateDir,
+		restart:   make(chan struct{}),
 	}
 }
 
@@ -63,9 +79,19 @@ func (c *Client) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		select {
+		case <-c.restart:
+			return ErrRestart
+		default:
+		}
 		err := c.connectAndServe(ctx, func() { attempt = 0 })
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		select {
+		case <-c.restart:
+			return ErrRestart
+		default:
 		}
 		// A policy-violation close = control plane rejected us (revoked/unknown), not a transient drop.
 		if websocket.CloseStatus(err) == websocket.StatusPolicyViolation {
@@ -82,6 +108,8 @@ func (c *Client) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-c.restart:
+			return ErrRestart
 		case <-time.After(delay):
 		}
 	}
@@ -92,6 +120,15 @@ func (c *Client) Run(ctx context.Context) error {
 func (c *Client) connectAndServe(ctx context.Context, onReady func()) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// A staged upgrade tears down the live connection so Run can exit and restart.
+	go func() {
+		select {
+		case <-c.restart:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	conn, _, err := websocket.Dial(ctx, c.wsURL(), nil)
 	if err != nil {
@@ -131,6 +168,7 @@ func (c *Client) authenticate(ctx context.Context, conn *websocket.Conn) error {
 	reply, err := protocol.NewEnvelope(protocol.TypeAuth, protocol.Auth{
 		HostID:    c.cfg.HostID,
 		Signature: c.identity.Sign(ch.Nonce),
+		Version:   c.version,
 	})
 	if err != nil {
 		return err
@@ -170,6 +208,13 @@ func (c *Client) dispatch(env protocol.Envelope, send chan protocol.Envelope) er
 			return err
 		}
 		return c.cache.ApplySnapshot(s, env.Seq)
+	case protocol.TypeUpgrade:
+		var up protocol.Upgrade
+		if err := json.Unmarshal(env.Data, &up); err != nil {
+			return err
+		}
+		c.handleUpgrade(up)
+		return nil
 	case protocol.TypePing:
 		pong, _ := protocol.NewEnvelope(protocol.TypePong, nil)
 		send <- pong
@@ -177,6 +222,27 @@ func (c *Client) dispatch(env protocol.Envelope, send chan protocol.Envelope) er
 	default:
 		return nil // ignore unknown message types
 	}
+}
+
+// handleUpgrade stages the target build in the background (a multi-MB download
+// must not block the read loop) and signals a restart once it lands. A no-op if
+// already on the target or an upgrade is already running.
+func (c *Client) handleUpgrade(up protocol.Upgrade) {
+	if up.Version == "" || up.Version == c.version {
+		return
+	}
+	if !c.upgrading.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		if err := c.stageUpgrade(context.Background(), up); err != nil {
+			log.Printf("upgrade to %s failed: %v", up.Version, err)
+			c.upgrading.Store(false)
+			return
+		}
+		log.Printf("upgrade to %s staged; restarting", up.Version)
+		c.restartOnce.Do(func() { close(c.restart) })
+	}()
 }
 
 // verifySnapshot checks the control plane's signature over the snapshot. With no

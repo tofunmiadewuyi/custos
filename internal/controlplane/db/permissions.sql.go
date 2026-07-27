@@ -173,6 +173,27 @@ func (q *Queries) UserHasGlobalPermission(ctx context.Context, arg UserHasGlobal
 	return exists, err
 }
 
+const userHasGroupPermission = `-- name: UserHasGroupPermission :one
+select exists (
+  select 1 from grants
+  where user_id = $1 and permission = $2 and revoked_at is null
+    and target_kind = 'group' and target_id = $3
+)
+`
+
+type UserHasGroupPermissionParams struct {
+	UserID     pgtype.UUID
+	Permission string
+	GroupID    pgtype.UUID
+}
+
+func (q *Queries) UserHasGroupPermission(ctx context.Context, arg UserHasGroupPermissionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, userHasGroupPermission, arg.UserID, arg.Permission, arg.GroupID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const userHasSecretPermission = `-- name: UserHasSecretPermission :one
 select exists (
   select 1 from grants g
@@ -194,6 +215,27 @@ type UserHasSecretPermissionParams struct {
 
 func (q *Queries) UserHasSecretPermission(ctx context.Context, arg UserHasSecretPermissionParams) (bool, error) {
 	row := q.db.QueryRow(ctx, userHasSecretPermission, arg.UserID, arg.Permission, arg.SecretID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const userHasSetPermission = `-- name: UserHasSetPermission :one
+select exists (
+  select 1 from grants
+  where user_id = $1 and permission = $2 and revoked_at is null
+    and target_kind = 'set' and target_id = $3
+)
+`
+
+type UserHasSetPermissionParams struct {
+	UserID     pgtype.UUID
+	Permission string
+	SetID      pgtype.UUID
+}
+
+func (q *Queries) UserHasSetPermission(ctx context.Context, arg UserHasSetPermissionParams) (bool, error) {
+	row := q.db.QueryRow(ctx, userHasSetPermission, arg.UserID, arg.Permission, arg.SetID)
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err

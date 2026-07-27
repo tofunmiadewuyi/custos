@@ -31,12 +31,17 @@ func (s *Server) handleDaemon(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	host, err := s.authenticateDaemon(ctx, conn)
+	host, version, err := s.authenticateDaemon(ctx, conn)
 	if err != nil {
 		conn.Close(websocket.StatusPolicyViolation, "authentication failed")
 		return
 	}
 	hostID := uuidString(host.ID)
+
+	if version != "" && version != host.AgentVersion {
+		s.q.SetHostVersion(ctx, db.SetHostVersionParams{ID: host.ID, AgentVersion: version})
+		host.AgentVersion = version
+	}
 
 	send := make(chan protocol.Envelope, 32)
 	s.hub.register(hostID, send, cancel)
@@ -49,55 +54,64 @@ func (s *Server) handleDaemon(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A host still behind its desired version gets the upgrade re-pushed on connect.
+	if host.DesiredVersion != "" && host.DesiredVersion != host.AgentVersion {
+		if up, err := s.buildUpgrade(ctx, host.DesiredVersion); err == nil {
+			if env, err := protocol.NewEnvelope(protocol.TypeUpgrade, up); err == nil {
+				send <- env
+			}
+		}
+	}
+
 	go s.writeDaemon(ctx, cancel, conn, send)
 	s.readDaemon(ctx, conn, host)
 }
 
 // authenticateDaemon runs the server side of the challenge/response: send a
 // nonce, verify the signature against the host's registered identity key.
-func (s *Server) authenticateDaemon(ctx context.Context, conn *websocket.Conn) (db.Host, error) {
+func (s *Server) authenticateDaemon(ctx context.Context, conn *websocket.Conn) (db.Host, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, daemonReadTimeout)
 	defer cancel()
 
 	nonce, err := identity.NewChallenge()
 	if err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
 	challenge, err := protocol.NewEnvelope(protocol.TypeChallenge, protocol.Challenge{Nonce: nonce})
 	if err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
 	if err := wsjson.Write(ctx, conn, challenge); err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
 
 	var env protocol.Envelope
 	if err := wsjson.Read(ctx, conn, &env); err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
 	if env.Type != protocol.TypeAuth {
-		return db.Host{}, errors.New("expected auth message")
+		return db.Host{}, "", errors.New("expected auth message")
 	}
 	var auth protocol.Auth
 	if err := json.Unmarshal(env.Data, &auth); err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
 
 	hostID, err := parseUUID(auth.HostID)
 	if err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
 	host, err := s.q.GetHostByID(ctx, hostID)
 	if err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
 	if host.Status != "active" {
-		return db.Host{}, errors.New("host not active")
+		return db.Host{}, "", errors.New("host not active")
 	}
 	if err := identity.Verify(host.IdentityKey, nonce, auth.Signature); err != nil {
-		return db.Host{}, err
+		return db.Host{}, "", err
 	}
-	return host, nil
+	return host, auth.Version, nil
 }
 
 func (s *Server) buildSnapshot(ctx context.Context, host db.Host) (protocol.Snapshot, error) {

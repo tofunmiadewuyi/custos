@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tofunmiadewuyi/custos/internal/hybrid"
 	"github.com/tofunmiadewuyi/custos/internal/identity"
 	"github.com/tofunmiadewuyi/custos/internal/protocol"
 )
@@ -45,7 +46,7 @@ type EnrollOptions struct {
 
 // Enroll registers this host with the control plane: it generates the identity
 // keypair, exchanges the admin token for a host ID, and persists both. The
-// private key never leaves the machine — only its public half is sent.
+// private key never leaves the machine
 func Enroll(ctx context.Context, store *Store, opts EnrollOptions) error {
 	if store.Enrolled() {
 		return errors.New("already enrolled")
@@ -54,18 +55,26 @@ func Enroll(ctx context.Context, store *Store, opts EnrollOptions) error {
 	if err != nil {
 		return err
 	}
+	encKP, err := hybrid.GenerateKeyPair()
+	if err != nil {
+		return err
+	}
 	resp, err := postEnroll(ctx, opts.ControlPlane, protocol.EnrollRequest{
-		Token:     opts.Token,
-		Hostname:  opts.Hostname,
-		PublicKey: kp.PublicKey(),
-		MachineID: machineID(),
+		Token:         opts.Token,
+		Hostname:      opts.Hostname,
+		PublicKey:     kp.PublicKey(),
+		EncryptionKey: encKP.PublicKey(),
+		MachineID:     machineID(),
 	})
 	if err != nil {
 		return err
 	}
-	// Save the identity first: without it we can't authenticate, and a stray
-	// config with no key is worse than no config.
+	// Save the keys first: without them we can't authenticate or decrypt, and a
+	// stray config with no keys is worse than no config.
 	if err := store.SaveIdentity(kp); err != nil {
+		return err
+	}
+	if err := store.SaveEncryptionKey(encKP); err != nil {
 		return err
 	}
 	return store.SaveConfig(Config{

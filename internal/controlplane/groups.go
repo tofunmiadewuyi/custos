@@ -35,6 +35,11 @@ type groupDetailView struct {
 }
 
 func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	if !s.canGlobal(r.Context(), auth, "group.create") {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	var req createGroupRequest
 	if err := s.readRequest(r, &req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -44,31 +49,64 @@ func (s *Server) handleCreateGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
-	g, err := s.q.CreateGroup(r.Context(), db.CreateGroupParams{Name: req.Name, Description: req.Description})
+	tx, err := s.pool.Begin(r.Context())
 	if err != nil {
 		serverError(w, "could not create group", err)
 		return
 	}
-	s.writeResponse(w, authFrom(r.Context()).ClientPublicKey, toGroupView(g))
+	defer tx.Rollback(r.Context())
+	q := db.New(tx)
+
+	g, err := q.CreateGroup(r.Context(), db.CreateGroupParams{Name: req.Name, Description: req.Description})
+	if err != nil {
+		serverError(w, "could not create group", err)
+		return
+	}
+	if err := s.grantOwner(r.Context(), q, auth.UserID, "group", g.ID, "group.read", "group.manage"); err != nil {
+		serverError(w, "could not create group", err)
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		serverError(w, "could not create group", err)
+		return
+	}
+	s.writeResponse(w, auth.ClientPublicKey, toGroupView(g))
 }
 
 func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.q.ListGroups(r.Context())
-	if err != nil {
-		serverError(w, "could not list groups", err)
-		return
+	auth := authFrom(r.Context())
+	views := []groupView{}
+	if auth.Role == "admin" {
+		rows, err := s.q.ListGroups(r.Context())
+		if err != nil {
+			serverError(w, "could not list groups", err)
+			return
+		}
+		for _, g := range rows {
+			views = append(views, groupView{uuidString(g.ID), g.Name, g.Description, g.CreatedAt.Time})
+		}
+	} else {
+		rows, err := s.q.ListReadableGroups(r.Context(), auth.UserID)
+		if err != nil {
+			serverError(w, "could not list groups", err)
+			return
+		}
+		for _, g := range rows {
+			views = append(views, groupView{uuidString(g.ID), g.Name, g.Description, g.CreatedAt.Time})
+		}
 	}
-	views := make([]groupView, 0, len(rows))
-	for _, g := range rows {
-		views = append(views, groupView{uuidString(g.ID), g.Name, g.Description, g.CreatedAt.Time})
-	}
-	s.writeResponse(w, authFrom(r.Context()).ClientPublicKey, views)
+	s.writeResponse(w, auth.ClientPublicKey, views)
 }
 
 func (s *Server) handleGetGroup(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
 	groupID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+	if !s.canGroup(r.Context(), auth, "group.read", groupID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	g, err := s.q.GetGroup(r.Context(), groupID)
@@ -96,6 +134,10 @@ func (s *Server) handleDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	groupID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+	if !s.canGroup(r.Context(), authFrom(r.Context()), "group.manage", groupID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	// Member hosts, grabbed before deletion so we can push their new snapshots.
@@ -139,6 +181,10 @@ func (s *Server) handleAddGroupResource(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid group id", http.StatusBadRequest)
 		return
 	}
+	if !s.canGroup(r.Context(), authFrom(r.Context()), "group.manage", groupID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	var req struct {
 		ResourceKind string `json:"resource_kind"`
 		ResourceID   string `json:"resource_id"`
@@ -172,6 +218,10 @@ func (s *Server) handleRemoveGroupResource(w http.ResponseWriter, r *http.Reques
 	groupID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid group id", http.StatusBadRequest)
+		return
+	}
+	if !s.canGroup(r.Context(), authFrom(r.Context()), "group.manage", groupID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var req struct {

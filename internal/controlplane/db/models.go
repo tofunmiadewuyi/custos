@@ -61,16 +61,28 @@ type GroupResource struct {
 }
 
 type Host struct {
-	ID          pgtype.UUID
-	Name        string
-	Hostname    string
-	IdentityKey string
-	Accounts    []string
-	Status      string
-	MachineID   pgtype.Text
-	LastSeq     int64
-	EnrolledAt  pgtype.Timestamptz
-	LastSeenAt  pgtype.Timestamptz
+	ID             pgtype.UUID
+	Name           string
+	Hostname       string
+	IdentityKey    string
+	EncryptionKey  string
+	Accounts       []string
+	Status         string
+	MachineID      pgtype.Text
+	LastSeq        int64
+	AgentVersion   string
+	DesiredVersion string
+	EnrolledAt     pgtype.Timestamptz
+	LastSeenAt     pgtype.Timestamptz
+}
+
+type HostSetBinding struct {
+	HostID    pgtype.UUID
+	SetID     pgtype.UUID
+	AsUser    pgtype.Text
+	GrantedBy pgtype.UUID
+	CreatedAt pgtype.Timestamptz
+	RevokedAt pgtype.Timestamptz
 }
 
 type Identity struct {
@@ -152,6 +164,24 @@ type SecretAuditLog struct {
 	At         pgtype.Timestamptz
 }
 
+type SecretSet struct {
+	ID        pgtype.UUID
+	Name      string
+	CreatedBy pgtype.UUID
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
+type SecretSetEntry struct {
+	SetID      pgtype.UUID
+	Key        string
+	Ciphertext []byte
+	Nonce      []byte
+	WrappedKey []byte
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
 type Session struct {
 	ID              pgtype.UUID
 	UserID          pgtype.UUID
@@ -160,6 +190,16 @@ type Session struct {
 	CreatedAt       pgtype.Timestamptz
 	ExpiresAt       pgtype.Timestamptz
 	RevokedAt       pgtype.Timestamptz
+}
+
+type SetAuditLog struct {
+	ID       pgtype.UUID
+	SetName  string
+	EntryKey pgtype.Text
+	HostID   pgtype.UUID
+	Action   string
+	Actor    pgtype.UUID
+	At       pgtype.Timestamptz
 }
 
 type SshAccessLog struct {

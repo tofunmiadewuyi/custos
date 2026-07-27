@@ -14,7 +14,7 @@ func cmdGenKeys(args []string) {
 	if _, err := rand.Read(master); err != nil {
 		fatal("gen-keys: %v", err)
 	}
-	priv, pub, err := hybrid.GenerateKeyPair()
+	client, err := hybrid.GenerateKeyPair()
 	if err != nil {
 		fatal("gen-keys: %v", err)
 	}
@@ -27,7 +27,7 @@ func cmdGenKeys(args []string) {
 	fmt.Println("# control-plane environment:")
 	fmt.Printf("CUSTOS_MASTER_KEY=%s\n", enc(master))
 	fmt.Printf("CUSTOS_SIGNING_PRIVATE_KEY=%s\n", signer.PrivateKey())
-	fmt.Printf("CUSTOS_CLIENT_PRIVATE_KEY=%s\n", enc(priv))
+	fmt.Printf("CUSTOS_CLIENT_PRIVATE_KEY=%s\n", client.PrivateKey())
 	fmt.Println("# embed in the frontend:")
-	fmt.Printf("CUSTOS_CLIENT_PUBLIC_KEY=%s\n", enc(pub))
+	fmt.Printf("CUSTOS_CLIENT_PUBLIC_KEY=%s\n", client.PublicKey())
 }

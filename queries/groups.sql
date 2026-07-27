@@ -4,6 +4,14 @@ insert into resource_groups (name, description) values ($1, $2) returning *;
 -- name: ListGroups :many
 select id, name, description, created_at from resource_groups order by name;
 
+-- name: ListReadableGroups :many
+select distinct rg.id, rg.name, rg.description, rg.created_at
+from resource_groups rg
+join grants g on g.permission = 'group.read' and g.revoked_at is null
+  and g.target_kind = 'group' and g.target_id = rg.id
+where g.user_id = $1
+order by rg.name;
+
 -- name: GetGroup :one
 select * from resource_groups where id = $1;
 

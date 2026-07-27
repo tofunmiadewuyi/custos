@@ -41,6 +41,13 @@ func (h *hub) unregister(hostID string, send chan protocol.Envelope) {
 	h.mu.Unlock()
 }
 
+// online reports whether a host has a live connection right now.
+func (h *hub) online(hostID string) bool {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.conns[hostID] != nil
+}
+
 // push delivers envelope to a host's live connection if it has one. It never blocks:
 // a full buffer is dropped, since the daemon reconciles from the snapshot on its
 // next (re)connect anyway.

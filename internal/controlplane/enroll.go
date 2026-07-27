@@ -86,11 +86,12 @@ func (s *Server) enroll(ctx context.Context, req protocol.EnrollRequest) (string
 	}
 
 	host, err := q.CreateHost(ctx, db.CreateHostParams{
-		Name:        req.Hostname,
-		Hostname:    req.Hostname,
-		IdentityKey: req.PublicKey,
-		Accounts:    tok.Accounts,
-		MachineID:   machineID,
+		Name:          req.Hostname,
+		Hostname:      req.Hostname,
+		IdentityKey:   req.PublicKey,
+		Accounts:      tok.Accounts,
+		MachineID:     machineID,
+		EncryptionKey: req.EncryptionKey,
 	})
 	if isUniqueViolation(err) { // lost a race against a concurrent enroll
 		return "", errAlreadyEnrolled

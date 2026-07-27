@@ -11,14 +11,14 @@ import (
 )
 
 func TestReadRequestEncrypted(t *testing.T) {
-	serverPriv, serverPub, err := hybrid.GenerateKeyPair()
+	server, err := hybrid.GenerateKeyPair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &Server{cfg: Config{EncryptionEnabled: true, HybridPrivateKey: serverPriv}}
+	s := &Server{cfg: Config{EncryptionEnabled: true, HybridPrivateKey: server.Private()}}
 
 	plain, _ := json.Marshal(loginRequest{Email: "a@b.com", Password: "pw"})
-	sealed, err := hybrid.Seal(serverPub, plain)
+	sealed, err := hybrid.Seal(server.Public(), plain)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,13 +47,13 @@ func TestReadRequestPlaintextWhenDisabled(t *testing.T) {
 }
 
 func TestWriteResponseSealsToClient(t *testing.T) {
-	clientPriv, clientPub, _ := hybrid.GenerateKeyPair()
+	client, _ := hybrid.GenerateKeyPair()
 	s := &Server{cfg: Config{EncryptionEnabled: true}}
 
 	rec := httptest.NewRecorder()
-	s.writeResponse(rec, clientPub, tokenPair{AccessToken: "acc", RefreshToken: "ref"})
+	s.writeResponse(rec, client.Public(), tokenPair{AccessToken: "acc", RefreshToken: "ref"})
 
-	opened, err := hybrid.Open(clientPriv, rec.Body.Bytes())
+	opened, err := client.Open(rec.Body.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
