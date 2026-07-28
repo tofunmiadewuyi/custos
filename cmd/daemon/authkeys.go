@@ -38,7 +38,7 @@ func cmdAuthkeys(args []string) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: custosd <install|enroll|run|authkeys|apply-update|status> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: custosd <install|uninstall|enroll|run|exec|authkeys|apply-update|status|version> [flags]")
 }
 
 func fatal(format string, args ...any) {

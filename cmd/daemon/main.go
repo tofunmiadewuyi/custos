@@ -15,6 +15,8 @@ func main() {
 	switch os.Args[1] {
 	case "install":
 		cmdInstall(os.Args[2:])
+	case "uninstall":
+		cmdUninstall(os.Args[2:])
 	case "enroll":
 		cmdEnroll(os.Args[2:])
 	case "authkeys":
