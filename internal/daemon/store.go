@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tofunmiadewuyi/custos/internal/hybrid"
 	"github.com/tofunmiadewuyi/custos/internal/identity"
@@ -18,7 +19,16 @@ const (
 	identityFile   = "identity.key"
 	encryptionFile = "encryption.key"
 	cacheFile      = "cache.json"
+	statusFile     = "status.json"
 )
+
+// LiveStatus is the daemon's runtime state, written on connect/disconnect so a
+// separate `custosd status` process can read the last-known live state.
+type LiveStatus struct {
+	Connected bool      `json:"connected"`
+	LastSeq   uint64    `json:"last_seq"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
 // Config is the daemon's persisted settings, written at enrollment.
 type Config struct {
@@ -89,6 +99,23 @@ func (s *Store) LoadEncryptionKey() (*hybrid.KeyPair, error) {
 		return nil, err
 	}
 	return hybrid.LoadKeyPair(string(data))
+}
+
+func (s *Store) SaveStatus(st LiveStatus) error {
+	data, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(s.path(statusFile), data, 0o600)
+}
+
+func (s *Store) LoadStatus() (LiveStatus, error) {
+	var st LiveStatus
+	data, err := os.ReadFile(s.path(statusFile))
+	if err != nil {
+		return st, err
+	}
+	return st, json.Unmarshal(data, &st)
 }
 
 func (s *Store) path(name string) string {

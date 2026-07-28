@@ -28,7 +28,7 @@ func main() {
 	case "apply-update":
 		cmdApplyUpdate(os.Args[2:])
 	case "status":
-		fatal("%s: not implemented yet", os.Args[1])
+		cmdStatus(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Println("custosd", version)
 	default:

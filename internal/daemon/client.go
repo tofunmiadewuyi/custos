@@ -40,6 +40,7 @@ type Client struct {
 	identity  *identity.KeyPair
 	cache     *Cache
 	secrets   *SecretStore
+	store     *Store // optional; writes live status for `custosd status`
 	logs      chan protocol.AccessLog
 	reads     chan protocol.SecretRead
 	version   string
@@ -85,9 +86,21 @@ func (c *Client) RecordSecretRead(rd protocol.SecretRead) {
 	}
 }
 
+// SetStore lets the client persist live status (connected/last-seq) for `custosd status`.
+func (c *Client) SetStore(s *Store) { c.store = s }
+
+// writeStatus records the current connection state for a separate status process.
+func (c *Client) writeStatus(connected bool) {
+	if c.store == nil {
+		return
+	}
+	c.store.SaveStatus(LiveStatus{Connected: connected, LastSeq: c.cache.Seq(), UpdatedAt: time.Now()})
+}
+
 // Run connects and serves until ctx is cancelled, reconnecting with jittered
 // backoff whenever the link drops.
 func (c *Client) Run(ctx context.Context) error {
+	defer c.writeStatus(false)
 	attempt := 0
 	for {
 		if ctx.Err() != nil {
@@ -98,7 +111,8 @@ func (c *Client) Run(ctx context.Context) error {
 			return ErrRestart
 		default:
 		}
-		err := c.connectAndServe(ctx, func() { attempt = 0 })
+		err := c.connectAndServe(ctx, func() { attempt = 0; c.writeStatus(true) })
+		c.writeStatus(false)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
