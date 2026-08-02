@@ -4,3 +4,7 @@ select * from public_keys where fingerprint = $1;
 -- name: InsertSSHAccessLog :exec
 insert into ssh_access_logs (host_id, hostname, public_key_id, account, allowed, at, fingerprint)
 values ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: ListHostAccessLogs :many
+select account, allowed, fingerprint, at from ssh_access_logs
+where host_id = $1 order by at desc limit 100;

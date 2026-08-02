@@ -28,10 +28,10 @@ func TestRoutesResolve(t *testing.T) {
 		{"GET", "/secrets"}, {"GET", "/secrets/x/audit"},
 		{"GET", "/groups"}, {"POST", "/groups/x/resources"},
 		{"GET", "/sets"}, {"PUT", "/sets/x/entries/KEY"},
-		{"POST", "/hosts/x/sets"},
+		{"POST", "/hosts/x/sets"}, {"GET", "/hosts/x"}, {"GET", "/hosts/x/audit"},
 		{"GET", "/users"}, {"POST", "/users/x/suspend"},
 		{"GET", "/grants"}, {"GET", "/invitations"},
-		{"GET", "/hosts"}, {"GET", "/secrets/x/access-audit"},
+		{"GET", "/hosts"}, {"GET", "/secrets/x/access-audit"}, {"GET", "/hosts/x/access-audit"},
 	}
 	for _, c := range cases {
 		req := httptest.NewRequest(c.method, c.path, nil)

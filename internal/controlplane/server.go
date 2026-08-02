@@ -124,7 +124,9 @@ func (s *Server) userRoutes(r chi.Router) {
 		r.Delete("/{id}/entries/{key}", s.handleDeleteSetEntry)
 	})
 
-	// Binding a set to a host is self-gated (set.read + host.access); the rest of /hosts is admin.
+	// Host detail/audit and set binding are self-gated on host.access; the rest of /hosts is admin.
+	r.Get("/hosts/{id}", s.handleGetHost)
+	r.Get("/hosts/{id}/audit", s.handleHostAudit)
 	r.Post("/hosts/{id}/sets", s.handleBindSet)
 	r.Delete("/hosts/{id}/sets/{setId}", s.handleUnbindSet)
 }
@@ -137,6 +139,7 @@ func (s *Server) adminRoutes(r chi.Router) {
 	r.Get("/audit", s.handleAllAudit)
 	r.Get("/grant-audit", s.handleGrantAudit)
 	r.Get("/secrets/{id}/access-audit", s.handleSecretAccessAudit)
+	r.Get("/hosts/{id}/access-audit", s.handleHostAccessAudit)
 
 	// /hosts and /invitations stay flat: each spans tiers (/hosts/{id}/sets is user, /invitations/accept is public).
 	r.Get("/hosts", s.handleListHosts)

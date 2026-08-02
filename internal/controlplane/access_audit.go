@@ -98,3 +98,77 @@ func (s *Server) handleSecretAccessAudit(w http.ResponseWriter, r *http.Request)
 		Entries:    entries,
 	})
 }
+
+type hostAccessAuditView struct {
+	HostID   string        `json:"host_id"`
+	HostName string        `json:"host_name"`
+	Entries  []accessEntry `json:"entries"`
+}
+
+// handleHostAccessAudit (admin) reports who can SSH to a host: directly, via a
+// group the host belongs to, or unconditionally as an active admin.
+func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	hostID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid host id", http.StatusBadRequest)
+		return
+	}
+
+	host, err := s.q.GetHostByID(r.Context(), hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "host not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		serverError(w, "could not load host", err)
+		return
+	}
+
+	direct, err := s.q.ListHostDirectAccess(r.Context(), hostID)
+	if err != nil {
+		serverError(w, "could not load access", err)
+		return
+	}
+	group, err := s.q.ListHostGroupAccess(r.Context(), hostID)
+	if err != nil {
+		serverError(w, "could not load access", err)
+		return
+	}
+	admins, err := s.q.ListActiveAdmins(r.Context())
+	if err != nil {
+		serverError(w, "could not load access", err)
+		return
+	}
+
+	entries := make([]accessEntry, 0, len(direct)+len(group)+len(admins))
+	for _, d := range direct {
+		at := d.CreatedAt.Time
+		entries = append(entries, accessEntry{
+			UserID: uuidString(d.UserID), Email: d.Email, Name: d.Name,
+			Role: d.Role, Status: d.Status, Via: "direct",
+			Permission: d.Permission, GrantedAt: &at,
+		})
+	}
+	for _, g := range group {
+		at := g.CreatedAt.Time
+		entries = append(entries, accessEntry{
+			UserID: uuidString(g.UserID), Email: g.Email, Name: g.Name,
+			Role: g.Role, Status: g.Status, Via: "group",
+			Permission: g.Permission, GroupID: uuidString(g.GroupID),
+			GroupName: g.GroupName, GrantedAt: &at,
+		})
+	}
+	for _, a := range admins {
+		entries = append(entries, accessEntry{
+			UserID: uuidString(a.UserID), Email: a.Email, Name: a.Name,
+			Role: "admin", Status: a.Status, Via: "admin", Permission: "*",
+		})
+	}
+
+	s.writeResponse(w, auth.ClientPublicKey, hostAccessAuditView{
+		HostID:   uuidString(host.ID),
+		HostName: host.Name,
+		Entries:  entries,
+	})
+}

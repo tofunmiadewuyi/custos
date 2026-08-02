@@ -49,6 +49,112 @@ func (q *Queries) ListActiveAdmins(ctx context.Context) ([]ListActiveAdminsRow, 
 	return items, nil
 }
 
+const listHostDirectAccess = `-- name: ListHostDirectAccess :many
+select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
+from grants g
+join users u on u.id = g.user_id
+where g.revoked_at is null
+  and g.permission = 'host.access'
+  and g.target_kind = 'host' and g.target_id = $1
+order by u.email
+`
+
+type ListHostDirectAccessRow struct {
+	UserID     pgtype.UUID
+	Email      string
+	Name       string
+	Role       string
+	Status     string
+	Permission string
+	CreatedAt  pgtype.Timestamptz
+}
+
+func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) ([]ListHostDirectAccessRow, error) {
+	rows, err := q.db.Query(ctx, listHostDirectAccess, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostDirectAccessRow{}
+	for rows.Next() {
+		var i ListHostDirectAccessRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.Role,
+			&i.Status,
+			&i.Permission,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHostGroupAccess = `-- name: ListHostGroupAccess :many
+select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at,
+       rg.id as group_id, rg.name as group_name
+from grants g
+join users u on u.id = g.user_id
+join resource_groups rg on rg.id = g.target_id
+where g.revoked_at is null
+  and g.permission = 'host.access'
+  and g.target_kind = 'group'
+  and rg.id in (
+    select group_id from group_resources
+    where resource_kind = 'host' and resource_id = $1
+  )
+order by rg.name, u.email
+`
+
+type ListHostGroupAccessRow struct {
+	UserID     pgtype.UUID
+	Email      string
+	Name       string
+	Role       string
+	Status     string
+	Permission string
+	CreatedAt  pgtype.Timestamptz
+	GroupID    pgtype.UUID
+	GroupName  string
+}
+
+func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) ([]ListHostGroupAccessRow, error) {
+	rows, err := q.db.Query(ctx, listHostGroupAccess, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostGroupAccessRow{}
+	for rows.Next() {
+		var i ListHostGroupAccessRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.Role,
+			&i.Status,
+			&i.Permission,
+			&i.CreatedAt,
+			&i.GroupID,
+			&i.GroupName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSecretDirectAccess = `-- name: ListSecretDirectAccess :many
 select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
 from grants g

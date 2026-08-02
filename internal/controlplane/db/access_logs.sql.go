@@ -57,3 +57,40 @@ func (q *Queries) InsertSSHAccessLog(ctx context.Context, arg InsertSSHAccessLog
 	)
 	return err
 }
+
+const listHostAccessLogs = `-- name: ListHostAccessLogs :many
+select account, allowed, fingerprint, at from ssh_access_logs
+where host_id = $1 order by at desc limit 100
+`
+
+type ListHostAccessLogsRow struct {
+	Account     string
+	Allowed     bool
+	Fingerprint string
+	At          pgtype.Timestamptz
+}
+
+func (q *Queries) ListHostAccessLogs(ctx context.Context, hostID pgtype.UUID) ([]ListHostAccessLogsRow, error) {
+	rows, err := q.db.Query(ctx, listHostAccessLogs, hostID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostAccessLogsRow{}
+	for rows.Next() {
+		var i ListHostAccessLogsRow
+		if err := rows.Scan(
+			&i.Account,
+			&i.Allowed,
+			&i.Fingerprint,
+			&i.At,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
