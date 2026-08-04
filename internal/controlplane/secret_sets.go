@@ -28,9 +28,8 @@ type createSetRequest struct {
 	Entries []setEntryInput `json:"entries"`
 }
 
-// updateSetRequest replaces the whole entry set, mirroring a re-pasted .env.
 type updateSetRequest struct {
-	Entries []setEntryInput `json:"entries"`
+	Name string `json:"name"`
 }
 
 type setView struct {
@@ -39,6 +38,20 @@ type setView struct {
 	Keys      []string  `json:"keys"` // env var names; values are never returned here
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type setListView struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	KeyCount  int64     `json:"key_count"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type setHostView struct {
+	hostView
+	AsUser  string    `json:"as_user,omitempty"`
+	BoundAt time.Time `json:"bound_at"`
 }
 
 func (s *Server) handleCreateSet(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +119,7 @@ func (s *Server) handleCreateSet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleListSets(w http.ResponseWriter, r *http.Request) {
 	auth := authFrom(r.Context())
-	views := []setView{}
+	views := []setListView{}
 	if auth.Role == "admin" {
 		rows, err := s.q.ListSets(r.Context())
 		if err != nil {
@@ -114,8 +127,8 @@ func (s *Server) handleListSets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, row := range rows {
-			views = append(views, setView{
-				ID: uuidString(row.ID), Name: row.Name,
+			views = append(views, setListView{
+				ID: uuidString(row.ID), Name: row.Name, KeyCount: row.KeyCount,
 				CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 			})
 		}
@@ -126,8 +139,8 @@ func (s *Server) handleListSets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for _, row := range rows {
-			views = append(views, setView{
-				ID: uuidString(row.ID), Name: row.Name,
+			views = append(views, setListView{
+				ID: uuidString(row.ID), Name: row.Name, KeyCount: row.KeyCount,
 				CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 			})
 		}
@@ -166,11 +179,51 @@ func (s *Server) handleGetSet(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
-	if s.wrapper == nil {
-		http.Error(w, "vault unavailable", http.StatusServiceUnavailable)
+func (s *Server) handleListSetHosts(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	setID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid set id", http.StatusBadRequest)
 		return
 	}
+	if !s.canSet(r.Context(), auth, "set.read", setID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if _, err := s.q.GetSet(r.Context(), setID); errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "set not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		serverError(w, "could not load set", err)
+		return
+	}
+	rows, err := s.q.ListHostsForSet(r.Context(), setID)
+	if err != nil {
+		serverError(w, "could not list set hosts", err)
+		return
+	}
+	views := make([]setHostView, 0, len(rows))
+	for _, h := range rows {
+		views = append(views, setHostView{
+			hostView: hostView{
+				ID:             uuidString(h.ID),
+				Name:           h.Name,
+				Hostname:       h.Hostname,
+				Accounts:       h.Accounts,
+				Status:         h.Status,
+				AgentVersion:   h.AgentVersion,
+				DesiredVersion: h.DesiredVersion,
+				EnrolledAt:     h.EnrolledAt.Time,
+				LastSeenAt:     nullTime(h.LastSeenAt),
+			},
+			AsUser:  h.AsUser.String,
+			BoundAt: h.BoundAt.Time,
+		})
+	}
+	s.writeResponse(w, auth.ClientPublicKey, views)
+}
+
+func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
 	auth := authFrom(r.Context())
 	setID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
@@ -186,8 +239,8 @@ func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	if err := validateEntries(req.Entries); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if req.Name == "" {
+		http.Error(w, "name is required", http.StatusBadRequest)
 		return
 	}
 
@@ -209,19 +262,20 @@ func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	q := db.New(tx)
 
-	if err := q.DeleteSetEntries(r.Context(), setID); err != nil {
+	updated, err := q.UpdateSetName(r.Context(), db.UpdateSetNameParams{ID: setID, Name: req.Name})
+	if isUniqueViolation(err) {
+		http.Error(w, "a set with that name already exists", http.StatusConflict)
+		return
+	}
+	if err != nil {
 		serverError(w, "could not update set", err)
 		return
 	}
-	if err := s.sealEntries(r.Context(), q, setID, req.Entries); err != nil {
-		serverError(w, "could not seal entries", err)
-		return
-	}
-	if err := q.TouchSet(r.Context(), setID); err != nil {
+	if err := q.RenameSetAuditLogs(r.Context(), db.RenameSetAuditLogsParams{SetName: set.Name, SetName_2: updated.Name}); err != nil {
 		serverError(w, "could not update set", err)
 		return
 	}
-	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetName: set.Name, Action: "edit", Actor: auth.UserID}); err != nil {
+	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetName: updated.Name, Action: "rename", Actor: auth.UserID}); err != nil {
 		serverError(w, "could not update set", err)
 		return
 	}
@@ -230,9 +284,14 @@ func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.pushSetToHosts(r.Context(), setID)
+	keys, err := s.q.ListSetKeys(r.Context(), setID)
+	if err != nil {
+		serverError(w, "could not update set", err)
+		return
+	}
 	s.writeResponse(w, auth.ClientPublicKey, setView{
-		ID: uuidString(set.ID), Name: set.Name, Keys: entryKeys(req.Entries),
-		CreatedAt: set.CreatedAt.Time, UpdatedAt: time.Now(),
+		ID: uuidString(updated.ID), Name: updated.Name, Keys: keys,
+		CreatedAt: updated.CreatedAt.Time, UpdatedAt: updated.UpdatedAt.Time,
 	})
 }
 
@@ -522,12 +581,15 @@ func (s *Server) handleDeleteSetEntry(w http.ResponseWriter, r *http.Request) {
 }
 
 type setAuditView struct {
-	Action   string    `json:"action"`
-	SetName  string    `json:"set_name"`
-	EntryKey string    `json:"entry_key,omitempty"`
-	HostID   string    `json:"host_id,omitempty"`
-	Actor    string    `json:"actor,omitempty"`
-	At       time.Time `json:"at"`
+	Action           string    `json:"action"`
+	SetName          string    `json:"set_name"`
+	EntryKey         string    `json:"entry_key,omitempty"`
+	HostID           string    `json:"host_id,omitempty"`
+	Actor            string    `json:"actor,omitempty"`
+	ActorEmail       string    `json:"actor_email,omitempty"`
+	ActorName        string    `json:"actor_name,omitempty"`
+	ActorDisplayName string    `json:"actor_display_name,omitempty"`
+	At               time.Time `json:"at"`
 }
 
 func (s *Server) handleSetAudit(w http.ResponseWriter, r *http.Request) {
@@ -560,7 +622,8 @@ func (s *Server) handleSetAudit(w http.ResponseWriter, r *http.Request) {
 		views = append(views, setAuditView{
 			Action: row.Action, SetName: row.SetName,
 			EntryKey: textString(row.EntryKey), HostID: uuidString(row.HostID), Actor: uuidString(row.Actor),
-			At: row.At.Time,
+			ActorEmail: textString(row.ActorEmail), ActorName: textString(row.ActorName),
+			ActorDisplayName: textString(row.ActorDisplayName), At: row.At.Time,
 		})
 	}
 	s.writeResponse(w, auth.ClientPublicKey, views)

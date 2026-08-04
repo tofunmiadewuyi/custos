@@ -51,14 +51,16 @@ insert into secret_audit_logs (secret_id, secret_name, action, user_id)
 values ($1, $2, $3, $4);
 
 -- name: ListSecretAudit :many
-select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id, u.email as user_email
+select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id,
+       u.email as user_email, u.name as user_name, u.display_name as user_display_name
 from secret_audit_logs a
 left join users u on u.id = a.user_id
 where a.secret_id = $1
 order by a.at desc;
 
 -- name: ListAllSecretAudit :many
-select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id, u.email as user_email
+select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id,
+       u.email as user_email, u.name as user_name, u.display_name as user_display_name
 from secret_audit_logs a
 left join users u on u.id = a.user_id
 order by a.at desc

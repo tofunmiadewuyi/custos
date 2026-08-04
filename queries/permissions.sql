@@ -18,7 +18,7 @@ select exists (
 );
 
 -- name: ListSecretDirectAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 from grants g
 join users u on u.id = g.user_id
 where g.revoked_at is null
@@ -26,7 +26,7 @@ where g.revoked_at is null
 order by u.email;
 
 -- name: ListSecretGroupAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at,
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name
 from grants g
 join users u on u.id = g.user_id
@@ -66,7 +66,7 @@ select exists (
 );
 
 -- name: ListHostDirectAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 from grants g
 join users u on u.id = g.user_id
 where g.revoked_at is null
@@ -75,7 +75,7 @@ where g.revoked_at is null
 order by u.email;
 
 -- name: ListHostGroupAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at,
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name
 from grants g
 join users u on u.id = g.user_id
@@ -90,6 +90,6 @@ where g.revoked_at is null
 order by rg.name, u.email;
 
 -- name: ListActiveAdmins :many
-select id as user_id, email, name, status from users
+select id as user_id, email, name, display_name, status from users
 where role = 'admin' and status = 'active'
 order by email;

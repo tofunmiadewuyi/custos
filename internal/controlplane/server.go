@@ -35,10 +35,10 @@ type Server struct {
 
 func NewServer(cfg Config, pool *pgxpool.Pool) *Server {
 	s := &Server{
-		cfg:    cfg,
-		pool:   pool,
-		q:      db.New(pool),
-		hub:    newHub(),
+		cfg:       cfg,
+		pool:      pool,
+		q:         db.New(pool),
+		hub:       newHub(),
 		email:     email.New(cfg.ResendAPIKey, cfg.EmailFrom),
 		authRL:    newRateLimiter(rate.Every(6*time.Second), 10), // ~10/min per IP, burst 10
 		checksums: map[string]map[string]string{},
@@ -117,6 +117,7 @@ func (s *Server) userRoutes(r chi.Router) {
 		r.Post("/", s.handleCreateSet)
 		r.Get("/", s.handleListSets)
 		r.Get("/{id}", s.handleGetSet)
+		r.Get("/{id}/hosts", s.handleListSetHosts)
 		r.Get("/{id}/audit", s.handleSetAudit)
 		r.Put("/{id}", s.handleUpdateSet)
 		r.Delete("/{id}", s.handleDeleteSet)

@@ -11,13 +11,15 @@ import (
 const auditFeedLimit = 100
 
 type auditEntry struct {
-	ID         string    `json:"id"`
-	Action     string    `json:"action"`
-	At         time.Time `json:"at"`
-	SecretID   string    `json:"secret_id"` // "" once the secret is deleted
-	SecretName string    `json:"secret_name"`
-	UserID     string    `json:"user_id"` // "" if the user was removed
-	UserEmail  string    `json:"user_email"`
+	ID              string    `json:"id"`
+	Action          string    `json:"action"`
+	At              time.Time `json:"at"`
+	SecretID        string    `json:"secret_id"` // "" once the secret is deleted
+	SecretName      string    `json:"secret_name"`
+	UserID          string    `json:"user_id"` // "" if the user was removed
+	UserEmail       string    `json:"user_email"`
+	UserName        string    `json:"user_name"`
+	UserDisplayName string    `json:"user_display_name"`
 }
 
 // handleSecretAudit returns the access/change history for one secret. Anyone who
@@ -44,6 +46,7 @@ func (s *Server) handleSecretAudit(w http.ResponseWriter, r *http.Request) {
 			ID: uuidString(a.ID), Action: a.Action, At: a.At.Time,
 			SecretID: uuidString(a.SecretID), SecretName: a.SecretName,
 			UserID: uuidString(a.UserID), UserEmail: textString(a.UserEmail),
+			UserName: textString(a.UserName), UserDisplayName: textString(a.UserDisplayName),
 		})
 	}
 	s.writeResponse(w, auth.ClientPublicKey, entries)
@@ -63,23 +66,28 @@ func (s *Server) handleAllAudit(w http.ResponseWriter, r *http.Request) {
 			ID: uuidString(a.ID), Action: a.Action, At: a.At.Time,
 			SecretID: uuidString(a.SecretID), SecretName: a.SecretName,
 			UserID: uuidString(a.UserID), UserEmail: textString(a.UserEmail),
+			UserName: textString(a.UserName), UserDisplayName: textString(a.UserDisplayName),
 		})
 	}
 	s.writeResponse(w, auth.ClientPublicKey, entries)
 }
 
 type grantAuditEntry struct {
-	ID           string    `json:"id"`
-	Action       string    `json:"action"`
-	GrantID      string    `json:"grant_id"`
-	ActorID      string    `json:"actor_id"`
-	ActorEmail   string    `json:"actor_email"`
-	SubjectID    string    `json:"subject_id"`
-	SubjectEmail string    `json:"subject_email"`
-	Permission   string    `json:"permission"`
-	TargetKind   string    `json:"target_kind"`
-	TargetID     string    `json:"target_id"` // "" for global grants
-	At           time.Time `json:"at"`
+	ID                 string    `json:"id"`
+	Action             string    `json:"action"`
+	GrantID            string    `json:"grant_id"`
+	ActorID            string    `json:"actor_id"`
+	ActorEmail         string    `json:"actor_email"`
+	ActorName          string    `json:"actor_name"`
+	ActorDisplayName   string    `json:"actor_display_name"`
+	SubjectID          string    `json:"subject_id"`
+	SubjectEmail       string    `json:"subject_email"`
+	SubjectName        string    `json:"subject_name"`
+	SubjectDisplayName string    `json:"subject_display_name"`
+	Permission         string    `json:"permission"`
+	TargetKind         string    `json:"target_kind"`
+	TargetID           string    `json:"target_id"` // "" for global grants
+	At                 time.Time `json:"at"`
 }
 
 // handleGrantAudit returns the most recent access grant/revoke events (admin).
@@ -94,7 +102,9 @@ func (s *Server) handleGrantAudit(w http.ResponseWriter, r *http.Request) {
 		entries = append(entries, grantAuditEntry{
 			ID: uuidString(a.ID), Action: a.Action, GrantID: uuidString(a.GrantID),
 			ActorID: uuidString(a.ActorID), ActorEmail: a.ActorEmail,
+			ActorName: textString(a.ActorName), ActorDisplayName: textString(a.ActorDisplayName),
 			SubjectID: uuidString(a.SubjectID), SubjectEmail: a.SubjectEmail,
+			SubjectName: textString(a.SubjectName), SubjectDisplayName: textString(a.SubjectDisplayName),
 			Permission: a.Permission, TargetKind: a.TargetKind, TargetID: uuidString(a.TargetID),
 			At: a.At.Time,
 		})

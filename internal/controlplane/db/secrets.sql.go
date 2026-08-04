@@ -148,7 +148,8 @@ func (q *Queries) InsertSecretAudit(ctx context.Context, arg InsertSecretAuditPa
 }
 
 const listAllSecretAudit = `-- name: ListAllSecretAudit :many
-select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id, u.email as user_email
+select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id,
+       u.email as user_email, u.name as user_name, u.display_name as user_display_name
 from secret_audit_logs a
 left join users u on u.id = a.user_id
 order by a.at desc
@@ -156,13 +157,15 @@ limit $1
 `
 
 type ListAllSecretAuditRow struct {
-	ID         pgtype.UUID
-	Action     string
-	At         pgtype.Timestamptz
-	SecretID   pgtype.UUID
-	SecretName string
-	UserID     pgtype.UUID
-	UserEmail  pgtype.Text
+	ID              pgtype.UUID
+	Action          string
+	At              pgtype.Timestamptz
+	SecretID        pgtype.UUID
+	SecretName      string
+	UserID          pgtype.UUID
+	UserEmail       pgtype.Text
+	UserName        pgtype.Text
+	UserDisplayName pgtype.Text
 }
 
 func (q *Queries) ListAllSecretAudit(ctx context.Context, limit int32) ([]ListAllSecretAuditRow, error) {
@@ -182,6 +185,8 @@ func (q *Queries) ListAllSecretAudit(ctx context.Context, limit int32) ([]ListAl
 			&i.SecretName,
 			&i.UserID,
 			&i.UserEmail,
+			&i.UserName,
+			&i.UserDisplayName,
 		); err != nil {
 			return nil, err
 		}
@@ -329,7 +334,8 @@ func (q *Queries) ListReadableSecrets(ctx context.Context, userID pgtype.UUID) (
 }
 
 const listSecretAudit = `-- name: ListSecretAudit :many
-select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id, u.email as user_email
+select a.id, a.action, a.at, a.secret_id, a.secret_name, u.id as user_id,
+       u.email as user_email, u.name as user_name, u.display_name as user_display_name
 from secret_audit_logs a
 left join users u on u.id = a.user_id
 where a.secret_id = $1
@@ -337,13 +343,15 @@ order by a.at desc
 `
 
 type ListSecretAuditRow struct {
-	ID         pgtype.UUID
-	Action     string
-	At         pgtype.Timestamptz
-	SecretID   pgtype.UUID
-	SecretName string
-	UserID     pgtype.UUID
-	UserEmail  pgtype.Text
+	ID              pgtype.UUID
+	Action          string
+	At              pgtype.Timestamptz
+	SecretID        pgtype.UUID
+	SecretName      string
+	UserID          pgtype.UUID
+	UserEmail       pgtype.Text
+	UserName        pgtype.Text
+	UserDisplayName pgtype.Text
 }
 
 func (q *Queries) ListSecretAudit(ctx context.Context, secretID pgtype.UUID) ([]ListSecretAuditRow, error) {
@@ -363,6 +371,8 @@ func (q *Queries) ListSecretAudit(ctx context.Context, secretID pgtype.UUID) ([]
 			&i.SecretName,
 			&i.UserID,
 			&i.UserEmail,
+			&i.UserName,
+			&i.UserDisplayName,
 		); err != nil {
 			return nil, err
 		}

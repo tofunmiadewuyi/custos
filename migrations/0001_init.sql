@@ -264,7 +264,7 @@ create table set_audit_logs (
   set_name  text not null,                   -- denormalized: survives deletion
   entry_key text,                            -- null for whole-set actions
   host_id   uuid,                            -- who consumed it (machine actions)
-  action    text not null check (action in ('create', 'edit', 'deliver', 'machine_read', 'delete')),
+  action    text not null check (action in ('create', 'edit', 'rename', 'deliver', 'machine_read', 'delete')),
   actor     uuid,                            -- historical ref, no FK
   at        timestamptz not null default now()
 );

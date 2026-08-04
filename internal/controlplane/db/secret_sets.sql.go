@@ -220,11 +220,71 @@ func (q *Queries) InsertSetAudit(ctx context.Context, arg InsertSetAuditParams) 
 	return err
 }
 
+const listHostsForSet = `-- name: ListHostsForSet :many
+select h.id, h.name, h.hostname, h.accounts, h.status, h.agent_version, h.desired_version,
+       h.enrolled_at, h.last_seen_at, hsb.as_user, hsb.created_at as bound_at
+from host_set_bindings hsb
+join hosts h on h.id = hsb.host_id
+where hsb.set_id = $1 and hsb.revoked_at is null
+order by h.name
+`
+
+type ListHostsForSetRow struct {
+	ID             pgtype.UUID
+	Name           string
+	Hostname       string
+	Accounts       []string
+	Status         string
+	AgentVersion   string
+	DesiredVersion string
+	EnrolledAt     pgtype.Timestamptz
+	LastSeenAt     pgtype.Timestamptz
+	AsUser         pgtype.Text
+	BoundAt        pgtype.Timestamptz
+}
+
+func (q *Queries) ListHostsForSet(ctx context.Context, setID pgtype.UUID) ([]ListHostsForSetRow, error) {
+	rows, err := q.db.Query(ctx, listHostsForSet, setID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostsForSetRow{}
+	for rows.Next() {
+		var i ListHostsForSetRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Hostname,
+			&i.Accounts,
+			&i.Status,
+			&i.AgentVersion,
+			&i.DesiredVersion,
+			&i.EnrolledAt,
+			&i.LastSeenAt,
+			&i.AsUser,
+			&i.BoundAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listReadableSets = `-- name: ListReadableSets :many
-select distinct ss.id, ss.name, ss.created_at, ss.updated_at
+select distinct ss.id, ss.name, ss.created_at, ss.updated_at, coalesce(k.key_count, 0)::bigint as key_count
 from secret_sets ss
 join grants g on g.permission = 'set.read' and g.revoked_at is null
   and g.target_kind = 'set' and g.target_id = ss.id
+left join (
+  select set_id, count(*) as key_count
+  from secret_set_entries
+  group by set_id
+) k on k.set_id = ss.id
 where g.user_id = $1
 order by ss.name
 `
@@ -234,6 +294,7 @@ type ListReadableSetsRow struct {
 	Name      string
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
+	KeyCount  int64
 }
 
 func (q *Queries) ListReadableSets(ctx context.Context, userID pgtype.UUID) ([]ListReadableSetsRow, error) {
@@ -250,6 +311,7 @@ func (q *Queries) ListReadableSets(ctx context.Context, userID pgtype.UUID) ([]L
 			&i.Name,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.KeyCount,
 		); err != nil {
 			return nil, err
 		}
@@ -262,17 +324,25 @@ func (q *Queries) ListReadableSets(ctx context.Context, userID pgtype.UUID) ([]L
 }
 
 const listSetAudit = `-- name: ListSetAudit :many
-select action, set_name, entry_key, host_id, actor, at
-from set_audit_logs where set_name = $1 order by at desc limit 100
+select a.action, a.set_name, a.entry_key, a.host_id, a.actor, u.email as actor_email,
+       u.name as actor_name, u.display_name as actor_display_name, a.at
+from set_audit_logs a
+left join users u on u.id = a.actor
+where a.set_name = $1
+order by a.at desc
+limit 100
 `
 
 type ListSetAuditRow struct {
-	Action   string
-	SetName  string
-	EntryKey pgtype.Text
-	HostID   pgtype.UUID
-	Actor    pgtype.UUID
-	At       pgtype.Timestamptz
+	Action           string
+	SetName          string
+	EntryKey         pgtype.Text
+	HostID           pgtype.UUID
+	Actor            pgtype.UUID
+	ActorEmail       pgtype.Text
+	ActorName        pgtype.Text
+	ActorDisplayName pgtype.Text
+	At               pgtype.Timestamptz
 }
 
 func (q *Queries) ListSetAudit(ctx context.Context, setName string) ([]ListSetAuditRow, error) {
@@ -290,6 +360,9 @@ func (q *Queries) ListSetAudit(ctx context.Context, setName string) ([]ListSetAu
 			&i.EntryKey,
 			&i.HostID,
 			&i.Actor,
+			&i.ActorEmail,
+			&i.ActorName,
+			&i.ActorDisplayName,
 			&i.At,
 		); err != nil {
 			return nil, err
@@ -327,7 +400,14 @@ func (q *Queries) ListSetKeys(ctx context.Context, setID pgtype.UUID) ([]string,
 }
 
 const listSets = `-- name: ListSets :many
-select id, name, created_at, updated_at from secret_sets order by name
+select ss.id, ss.name, ss.created_at, ss.updated_at, coalesce(k.key_count, 0)::bigint as key_count
+from secret_sets ss
+left join (
+  select set_id, count(*) as key_count
+  from secret_set_entries
+  group by set_id
+) k on k.set_id = ss.id
+order by ss.name
 `
 
 type ListSetsRow struct {
@@ -335,6 +415,7 @@ type ListSetsRow struct {
 	Name      string
 	CreatedAt pgtype.Timestamptz
 	UpdatedAt pgtype.Timestamptz
+	KeyCount  int64
 }
 
 func (q *Queries) ListSets(ctx context.Context) ([]ListSetsRow, error) {
@@ -351,6 +432,7 @@ func (q *Queries) ListSets(ctx context.Context) ([]ListSetsRow, error) {
 			&i.Name,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.KeyCount,
 		); err != nil {
 			return nil, err
 		}
@@ -360,6 +442,20 @@ func (q *Queries) ListSets(ctx context.Context) ([]ListSetsRow, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const renameSetAuditLogs = `-- name: RenameSetAuditLogs :exec
+update set_audit_logs set set_name = $2 where set_name = $1
+`
+
+type RenameSetAuditLogsParams struct {
+	SetName   string
+	SetName_2 string
+}
+
+func (q *Queries) RenameSetAuditLogs(ctx context.Context, arg RenameSetAuditLogsParams) error {
+	_, err := q.db.Exec(ctx, renameSetAuditLogs, arg.SetName, arg.SetName_2)
+	return err
 }
 
 const setsForHost = `-- name: SetsForHost :many
@@ -426,6 +522,28 @@ func (q *Queries) UnbindSet(ctx context.Context, arg UnbindSetParams) (int64, er
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const updateSetName = `-- name: UpdateSetName :one
+update secret_sets set name = $2, updated_at = now() where id = $1 returning id, name, created_by, created_at, updated_at
+`
+
+type UpdateSetNameParams struct {
+	ID   pgtype.UUID
+	Name string
+}
+
+func (q *Queries) UpdateSetName(ctx context.Context, arg UpdateSetNameParams) (SecretSet, error) {
+	row := q.db.QueryRow(ctx, updateSetName, arg.ID, arg.Name)
+	var i SecretSet
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const upsertSetEntry = `-- name: UpsertSetEntry :exec

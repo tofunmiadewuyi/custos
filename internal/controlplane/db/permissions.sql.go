@@ -12,16 +12,17 @@ import (
 )
 
 const listActiveAdmins = `-- name: ListActiveAdmins :many
-select id as user_id, email, name, status from users
+select id as user_id, email, name, display_name, status from users
 where role = 'admin' and status = 'active'
 order by email
 `
 
 type ListActiveAdminsRow struct {
-	UserID pgtype.UUID
-	Email  string
-	Name   string
-	Status string
+	UserID      pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Status      string
 }
 
 func (q *Queries) ListActiveAdmins(ctx context.Context) ([]ListActiveAdminsRow, error) {
@@ -37,6 +38,7 @@ func (q *Queries) ListActiveAdmins(ctx context.Context) ([]ListActiveAdminsRow, 
 			&i.UserID,
 			&i.Email,
 			&i.Name,
+			&i.DisplayName,
 			&i.Status,
 		); err != nil {
 			return nil, err
@@ -50,7 +52,7 @@ func (q *Queries) ListActiveAdmins(ctx context.Context) ([]ListActiveAdminsRow, 
 }
 
 const listHostDirectAccess = `-- name: ListHostDirectAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 from grants g
 join users u on u.id = g.user_id
 where g.revoked_at is null
@@ -60,13 +62,14 @@ order by u.email
 `
 
 type ListHostDirectAccessRow struct {
-	UserID     pgtype.UUID
-	Email      string
-	Name       string
-	Role       string
-	Status     string
-	Permission string
-	CreatedAt  pgtype.Timestamptz
+	UserID      pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
+	Status      string
+	Permission  string
+	CreatedAt   pgtype.Timestamptz
 }
 
 func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) ([]ListHostDirectAccessRow, error) {
@@ -82,6 +85,7 @@ func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) 
 			&i.UserID,
 			&i.Email,
 			&i.Name,
+			&i.DisplayName,
 			&i.Role,
 			&i.Status,
 			&i.Permission,
@@ -98,7 +102,7 @@ func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) 
 }
 
 const listHostGroupAccess = `-- name: ListHostGroupAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at,
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name
 from grants g
 join users u on u.id = g.user_id
@@ -114,15 +118,16 @@ order by rg.name, u.email
 `
 
 type ListHostGroupAccessRow struct {
-	UserID     pgtype.UUID
-	Email      string
-	Name       string
-	Role       string
-	Status     string
-	Permission string
-	CreatedAt  pgtype.Timestamptz
-	GroupID    pgtype.UUID
-	GroupName  string
+	UserID      pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
+	Status      string
+	Permission  string
+	CreatedAt   pgtype.Timestamptz
+	GroupID     pgtype.UUID
+	GroupName   string
 }
 
 func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) ([]ListHostGroupAccessRow, error) {
@@ -138,6 +143,7 @@ func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) (
 			&i.UserID,
 			&i.Email,
 			&i.Name,
+			&i.DisplayName,
 			&i.Role,
 			&i.Status,
 			&i.Permission,
@@ -156,7 +162,7 @@ func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) (
 }
 
 const listSecretDirectAccess = `-- name: ListSecretDirectAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 from grants g
 join users u on u.id = g.user_id
 where g.revoked_at is null
@@ -165,13 +171,14 @@ order by u.email
 `
 
 type ListSecretDirectAccessRow struct {
-	UserID     pgtype.UUID
-	Email      string
-	Name       string
-	Role       string
-	Status     string
-	Permission string
-	CreatedAt  pgtype.Timestamptz
+	UserID      pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
+	Status      string
+	Permission  string
+	CreatedAt   pgtype.Timestamptz
 }
 
 func (q *Queries) ListSecretDirectAccess(ctx context.Context, secretID pgtype.UUID) ([]ListSecretDirectAccessRow, error) {
@@ -187,6 +194,7 @@ func (q *Queries) ListSecretDirectAccess(ctx context.Context, secretID pgtype.UU
 			&i.UserID,
 			&i.Email,
 			&i.Name,
+			&i.DisplayName,
 			&i.Role,
 			&i.Status,
 			&i.Permission,
@@ -203,7 +211,7 @@ func (q *Queries) ListSecretDirectAccess(ctx context.Context, secretID pgtype.UU
 }
 
 const listSecretGroupAccess = `-- name: ListSecretGroupAccess :many
-select u.id as user_id, u.email, u.name, u.role, u.status, g.permission, g.created_at,
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name
 from grants g
 join users u on u.id = g.user_id
@@ -218,15 +226,16 @@ order by rg.name, u.email
 `
 
 type ListSecretGroupAccessRow struct {
-	UserID     pgtype.UUID
-	Email      string
-	Name       string
-	Role       string
-	Status     string
-	Permission string
-	CreatedAt  pgtype.Timestamptz
-	GroupID    pgtype.UUID
-	GroupName  string
+	UserID      pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
+	Status      string
+	Permission  string
+	CreatedAt   pgtype.Timestamptz
+	GroupID     pgtype.UUID
+	GroupName   string
 }
 
 func (q *Queries) ListSecretGroupAccess(ctx context.Context, secretID pgtype.UUID) ([]ListSecretGroupAccessRow, error) {
@@ -242,6 +251,7 @@ func (q *Queries) ListSecretGroupAccess(ctx context.Context, secretID pgtype.UUI
 			&i.UserID,
 			&i.Email,
 			&i.Name,
+			&i.DisplayName,
 			&i.Role,
 			&i.Status,
 			&i.Permission,

@@ -106,30 +106,56 @@ func (q *Queries) InsertGrantAudit(ctx context.Context, arg InsertGrantAuditPara
 }
 
 const listGrantAudit = `-- name: ListGrantAudit :many
-select id, action, grant_id, actor_id, actor_email, subject_id, subject_email,
-       permission, target_kind, target_id, at
-from grant_audit_logs
-order by at desc
+select ga.id, ga.action, ga.grant_id,
+       ga.actor_id, ga.actor_email, au.name as actor_name, au.display_name as actor_display_name,
+       ga.subject_id, ga.subject_email, su.name as subject_name, su.display_name as subject_display_name,
+       ga.permission, ga.target_kind, ga.target_id, ga.at
+from grant_audit_logs ga
+left join users au on au.id = ga.actor_id
+left join users su on su.id = ga.subject_id
+order by ga.at desc
 limit 100
 `
 
-func (q *Queries) ListGrantAudit(ctx context.Context) ([]GrantAuditLog, error) {
+type ListGrantAuditRow struct {
+	ID                 pgtype.UUID
+	Action             string
+	GrantID            pgtype.UUID
+	ActorID            pgtype.UUID
+	ActorEmail         string
+	ActorName          pgtype.Text
+	ActorDisplayName   pgtype.Text
+	SubjectID          pgtype.UUID
+	SubjectEmail       string
+	SubjectName        pgtype.Text
+	SubjectDisplayName pgtype.Text
+	Permission         string
+	TargetKind         string
+	TargetID           pgtype.UUID
+	At                 pgtype.Timestamptz
+}
+
+func (q *Queries) ListGrantAudit(ctx context.Context) ([]ListGrantAuditRow, error) {
 	rows, err := q.db.Query(ctx, listGrantAudit)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []GrantAuditLog{}
+	items := []ListGrantAuditRow{}
 	for rows.Next() {
-		var i GrantAuditLog
+		var i ListGrantAuditRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Action,
 			&i.GrantID,
 			&i.ActorID,
 			&i.ActorEmail,
+			&i.ActorName,
+			&i.ActorDisplayName,
 			&i.SubjectID,
 			&i.SubjectEmail,
+			&i.SubjectName,
+			&i.SubjectDisplayName,
 			&i.Permission,
 			&i.TargetKind,
 			&i.TargetID,

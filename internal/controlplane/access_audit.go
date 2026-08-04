@@ -12,16 +12,17 @@ import (
 // accessEntry is one path by which a user reaches a secret. A user may appear
 // more than once (e.g. a direct grant plus membership in two groups).
 type accessEntry struct {
-	UserID     string     `json:"user_id"`
-	Email      string     `json:"email"`
-	Name       string     `json:"name"`
-	Role       string     `json:"role"`
-	Status     string     `json:"status"`
-	Via        string     `json:"via"`                  // "direct" | "group" | "admin"
-	Permission string     `json:"permission"`           // "*" for admins (unconditional)
-	GroupID    string     `json:"group_id,omitempty"`   // set when via == "group"
-	GroupName  string     `json:"group_name,omitempty"` // set when via == "group"
-	GrantedAt  *time.Time `json:"granted_at,omitempty"` // nil for admins
+	UserID      string     `json:"user_id"`
+	Email       string     `json:"email"`
+	Name        string     `json:"name"`
+	DisplayName string     `json:"display_name"`
+	Role        string     `json:"role"`
+	Status      string     `json:"status"`
+	Via         string     `json:"via"`                  // "direct" | "group" | "admin"
+	Permission  string     `json:"permission"`           // "*" for admins (unconditional)
+	GroupID     string     `json:"group_id,omitempty"`   // set when via == "group"
+	GroupName   string     `json:"group_name,omitempty"` // set when via == "group"
+	GrantedAt   *time.Time `json:"granted_at,omitempty"` // nil for admins
 }
 
 type accessAuditView struct {
@@ -72,7 +73,8 @@ func (s *Server) handleSecretAccessAudit(w http.ResponseWriter, r *http.Request)
 		at := d.CreatedAt.Time
 		entries = append(entries, accessEntry{
 			UserID: uuidString(d.UserID), Email: d.Email, Name: d.Name,
-			Role: d.Role, Status: d.Status, Via: "direct",
+			DisplayName: textString(d.DisplayName),
+			Role:        d.Role, Status: d.Status, Via: "direct",
 			Permission: d.Permission, GrantedAt: &at,
 		})
 	}
@@ -80,7 +82,8 @@ func (s *Server) handleSecretAccessAudit(w http.ResponseWriter, r *http.Request)
 		at := g.CreatedAt.Time
 		entries = append(entries, accessEntry{
 			UserID: uuidString(g.UserID), Email: g.Email, Name: g.Name,
-			Role: g.Role, Status: g.Status, Via: "group",
+			DisplayName: textString(g.DisplayName),
+			Role:        g.Role, Status: g.Status, Via: "group",
 			Permission: g.Permission, GroupID: uuidString(g.GroupID),
 			GroupName: g.GroupName, GrantedAt: &at,
 		})
@@ -88,7 +91,8 @@ func (s *Server) handleSecretAccessAudit(w http.ResponseWriter, r *http.Request)
 	for _, a := range admins {
 		entries = append(entries, accessEntry{
 			UserID: uuidString(a.UserID), Email: a.Email, Name: a.Name,
-			Role: "admin", Status: a.Status, Via: "admin", Permission: "*",
+			DisplayName: textString(a.DisplayName),
+			Role:        "admin", Status: a.Status, Via: "admin", Permission: "*",
 		})
 	}
 
@@ -146,7 +150,8 @@ func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 		at := d.CreatedAt.Time
 		entries = append(entries, accessEntry{
 			UserID: uuidString(d.UserID), Email: d.Email, Name: d.Name,
-			Role: d.Role, Status: d.Status, Via: "direct",
+			DisplayName: textString(d.DisplayName),
+			Role:        d.Role, Status: d.Status, Via: "direct",
 			Permission: d.Permission, GrantedAt: &at,
 		})
 	}
@@ -154,7 +159,8 @@ func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 		at := g.CreatedAt.Time
 		entries = append(entries, accessEntry{
 			UserID: uuidString(g.UserID), Email: g.Email, Name: g.Name,
-			Role: g.Role, Status: g.Status, Via: "group",
+			DisplayName: textString(g.DisplayName),
+			Role:        g.Role, Status: g.Status, Via: "group",
 			Permission: g.Permission, GroupID: uuidString(g.GroupID),
 			GroupName: g.GroupName, GrantedAt: &at,
 		})
@@ -162,7 +168,8 @@ func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 	for _, a := range admins {
 		entries = append(entries, accessEntry{
 			UserID: uuidString(a.UserID), Email: a.Email, Name: a.Name,
-			Role: "admin", Status: a.Status, Via: "admin", Permission: "*",
+			DisplayName: textString(a.DisplayName),
+			Role:        "admin", Status: a.Status, Via: "admin", Permission: "*",
 		})
 	}
 

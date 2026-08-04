@@ -126,13 +126,62 @@ func TestSetLifecycle(t *testing.T) {
 		t.Fatalf("unexpected create response: %s", rec.Body.String())
 	}
 
+	rec = do(t, h, token, "GET", "/sets", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list sets: %d %s", rec.Code, rec.Body.String())
+	}
+	var listed []struct {
+		ID       string          `json:"id"`
+		Name     string          `json:"name"`
+		KeyCount int64           `json:"key_count"`
+		Keys     json.RawMessage `json:"keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].ID != created.ID || listed[0].Name != "billing" || listed[0].KeyCount != 2 {
+		t.Fatalf("unexpected list response: %s", rec.Body.String())
+	}
+	if listed[0].Keys != nil {
+		t.Fatalf("list response should not include keys: %s", rec.Body.String())
+	}
+
+	rec = do(t, h, token, "PUT", "/sets/"+created.ID, `{"name":"billing-renamed"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("rename set: %d %s", rec.Code, rec.Body.String())
+	}
+	var renamed struct {
+		ID   string   `json:"id"`
+		Name string   `json:"name"`
+		Keys []string `json:"keys"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &renamed); err != nil {
+		t.Fatal(err)
+	}
+	if renamed.ID != created.ID || renamed.Name != "billing-renamed" || len(renamed.Keys) != 2 {
+		t.Fatalf("unexpected rename response: %s", rec.Body.String())
+	}
+
 	// The creator (admin) can read it back, and the audit shows the create.
 	if rec := do(t, h, token, "GET", "/sets/"+created.ID, ""); rec.Code != http.StatusOK {
 		t.Fatalf("get set: %d %s", rec.Code, rec.Body.String())
 	}
 	rec = do(t, h, token, "GET", "/sets/"+created.ID+"/audit", "")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"action":"create"`) {
-		t.Fatalf("expected a create audit row, got %d %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get set audit: %d %s", rec.Code, rec.Body.String())
+	}
+	var audit []struct {
+		Action           string `json:"action"`
+		Actor            string `json:"actor"`
+		ActorEmail       string `json:"actor_email"`
+		ActorName        string `json:"actor_name"`
+		ActorDisplayName string `json:"actor_display_name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit) == 0 || audit[0].Actor == "" || audit[0].ActorEmail != "admin@test" || audit[0].ActorName != "admin@test" {
+		t.Fatalf("expected enriched actor audit rows, got %s", rec.Body.String())
 	}
 }
 
@@ -316,7 +365,21 @@ func TestBindRequiresBothEnds(t *testing.T) {
 	})
 	t.Run("both ends succeed", func(t *testing.T) {
 		grantVia(t, h, admin, aID, "host.access", "host", hostID)
-		requireCode(t, do(t, h, aTok, "POST", bindPath, bindBody), http.StatusNoContent)
+		requireCode(t, do(t, h, aTok, "POST", bindPath, fmt.Sprintf(`{"set_id":%q,"as_user":"deploy"}`, setID)), http.StatusNoContent)
+		rec := do(t, h, aTok, "GET", "/sets/"+setID+"/hosts", "")
+		requireCode(t, rec, http.StatusOK)
+		var hosts []struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Hostname string `json:"hostname"`
+			AsUser   string `json:"as_user"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &hosts); err != nil {
+			t.Fatal(err)
+		}
+		if len(hosts) != 1 || hosts[0].ID != hostID || hosts[0].Name != "h" || hosts[0].Hostname != "h" || hosts[0].AsUser != "deploy" {
+			t.Fatalf("unexpected set hosts response: %s", rec.Body.String())
+		}
 	})
 
 	bID, bTok := seedUser(t, s.pool, "b@test", "member")
