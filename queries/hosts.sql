@@ -29,7 +29,22 @@ update hosts set last_set_seq = last_set_seq + 1 where id = $1 returning last_se
 
 -- name: ListHosts :many
 select id, name, hostname, accounts, status, agent_version, desired_version, enrolled_at, last_seen_at
-from hosts order by name;
+from hosts
+where status = 'active'
+order by name;
+
+-- name: ListReadableHosts :many
+select distinct h.id, h.name, h.hostname, h.accounts, h.status, h.agent_version, h.desired_version,
+       h.enrolled_at, h.last_seen_at
+from hosts h
+join grants g on g.user_id = $1 and g.permission = 'host.access' and g.revoked_at is null
+  and (
+    (g.target_kind = 'host' and g.target_id = h.id)
+    or (g.target_kind = 'group' and g.target_id in (
+      select group_id from group_resources where resource_kind = 'host' and resource_id = h.id))
+  )
+where h.status = 'active'
+order by h.name;
 
 -- name: ListActiveHosts :many
 select id, name, hostname, agent_version, desired_version from hosts

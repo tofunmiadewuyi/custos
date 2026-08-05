@@ -230,7 +230,12 @@ func (s *Server) readDaemon(ctx context.Context, conn *websocket.Conn, host db.H
 
 // recordSecretRead logs a host serving a set to a local consumer, as a machine_read.
 func (s *Server) recordSecretRead(ctx context.Context, host db.Host, rd protocol.SecretRead) {
+	var setID pgtype.UUID
+	if set, err := s.q.GetSetByName(ctx, rd.SetName); err == nil {
+		setID = set.ID
+	}
 	s.q.InsertSetAudit(ctx, db.InsertSetAuditParams{
+		SetID:   setID,
 		SetName: rd.SetName,
 		HostID:  host.ID,
 		Action:  "machine_read",

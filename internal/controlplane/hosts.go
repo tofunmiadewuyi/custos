@@ -1,14 +1,18 @@
 package controlplane
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
+	"github.com/tofunmiadewuyi/custos/internal/identity"
 	"github.com/tofunmiadewuyi/custos/internal/protocol"
 )
 
@@ -103,21 +107,68 @@ func (s *Server) handleRevokeHost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid host id", http.StatusBadRequest)
 		return
 	}
-	n, err := s.q.SetHostStatus(r.Context(), db.SetHostStatusParams{ID: hostID, Status: "revoked"})
-	if err != nil {
+	if err := s.revokeHost(r.Context(), hostID); errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "host not found", http.StatusNotFound)
+		return
+	} else if err != nil {
 		serverError(w, "could not revoke host", err)
 		return
 	}
-	if n == 0 {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleDecommissionHost(w http.ResponseWriter, r *http.Request) {
+	hostID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid host id", http.StatusBadRequest)
+		return
+	}
+	host, err := s.q.GetHostByID(r.Context(), hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "host not found", http.StatusNotFound)
 		return
 	}
-	// Empty snapshot: the daemon replaces its whole authorized set with nothing.
-	purge, err := s.snapshotEnvelope(r.Context(), hostID, protocol.Snapshot{Entries: []protocol.AccessEntry{}})
 	if err != nil {
-		serverError(w, "could not revoke host", err)
+		serverError(w, "could not decommission host", err)
 		return
 	}
-	s.hub.disconnect(uuidString(hostID), purge)
+	if host.Status != "active" {
+		http.Error(w, "host not active", http.StatusConflict)
+		return
+	}
+	var req protocol.DecommissionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.At.IsZero() || time.Since(req.At) > 5*time.Minute || time.Until(req.At) > 5*time.Minute {
+		http.Error(w, "stale decommission request", http.StatusUnauthorized)
+		return
+	}
+	if err := identity.Verify(host.IdentityKey, protocol.DecommissionSigningInput(uuidString(hostID), req.At), req.Signature); err != nil {
+		http.Error(w, "invalid signature", http.StatusUnauthorized)
+		return
+	}
+	if err := s.revokeHost(r.Context(), hostID); err != nil {
+		serverError(w, "could not decommission host", err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) revokeHost(ctx context.Context, hostID pgtype.UUID) error {
+	n, err := s.q.SetHostStatus(ctx, db.SetHostStatusParams{ID: hostID, Status: "revoked"})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return pgx.ErrNoRows
+	}
+	// Empty snapshot: the daemon replaces its whole authorized set with nothing.
+	purge, err := s.snapshotEnvelope(ctx, hostID, protocol.Snapshot{Entries: []protocol.AccessEntry{}})
+	if err != nil {
+		return err
+	}
+	s.hub.disconnect(uuidString(hostID), purge)
+	return nil
 }

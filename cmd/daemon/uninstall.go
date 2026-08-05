@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/tofunmiadewuyi/custos/internal/daemon"
 )
@@ -15,10 +17,25 @@ import (
 func cmdUninstall(args []string) {
 	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
 	purge := fs.Bool("purge", false, "also remove the state dir and custos user (de-enrolls the host)")
+	skipControlPlane := fs.Bool("skip-control-plane", false, "do not notify the control plane that this host is being removed")
 	fs.Parse(args)
 
 	if os.Geteuid() != 0 {
 		fatal("uninstall: must run as root (try sudo)")
+	}
+
+	if !*skipControlPlane {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		store, err := daemon.OpenStore(installStateDir)
+		if err == nil {
+			err = daemon.Decommission(ctx, store)
+		}
+		cancel()
+		if err != nil {
+			warn("control-plane decommission failed: %v", err)
+		} else {
+			fmt.Println("decommissioned host in control plane")
+		}
 	}
 
 	// 1. Stop the service.
@@ -59,7 +76,11 @@ func cmdUninstall(args []string) {
 		fmt.Printf("kept %s and user %s — re-enroll to reuse, or rerun with --purge to remove\n", installStateDir, installUser)
 	}
 
-	fmt.Println("uninstalled. on the control plane, revoke this host: POST /hosts/{id}/revoke")
+	if *skipControlPlane {
+		fmt.Println("uninstalled. on the control plane, revoke this host: POST /hosts/{id}/revoke")
+	} else {
+		fmt.Println("uninstalled")
+	}
 }
 
 // runCmd runs a command best-effort, warning on failure.

@@ -99,7 +99,7 @@ func (s *Server) handleCreateSet(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not seal entries", err)
 		return
 	}
-	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetName: set.Name, Action: "create", Actor: auth.UserID}); err != nil {
+	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetID: set.ID, SetName: set.Name, Action: "create", Actor: auth.UserID}); err != nil {
 		serverError(w, "could not create set", err)
 		return
 	}
@@ -244,12 +244,10 @@ func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	set, err := s.q.GetSet(r.Context(), setID)
-	if errors.Is(err, pgx.ErrNoRows) {
+	if _, err := s.q.GetSet(r.Context(), setID); errors.Is(err, pgx.ErrNoRows) {
 		http.Error(w, "set not found", http.StatusNotFound)
 		return
-	}
-	if err != nil {
+	} else if err != nil {
 		serverError(w, "could not load set", err)
 		return
 	}
@@ -271,11 +269,7 @@ func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not update set", err)
 		return
 	}
-	if err := q.RenameSetAuditLogs(r.Context(), db.RenameSetAuditLogsParams{SetName: set.Name, SetName_2: updated.Name}); err != nil {
-		serverError(w, "could not update set", err)
-		return
-	}
-	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetName: updated.Name, Action: "rename", Actor: auth.UserID}); err != nil {
+	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetID: updated.ID, SetName: updated.Name, Action: "rename", Actor: auth.UserID}); err != nil {
 		serverError(w, "could not update set", err)
 		return
 	}
@@ -341,7 +335,7 @@ func (s *Server) handleDeleteSet(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not delete set", err)
 		return
 	}
-	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetName: set.Name, Action: "delete", Actor: auth.UserID}); err != nil {
+	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{SetID: set.ID, SetName: set.Name, Action: "delete", Actor: auth.UserID}); err != nil {
 		serverError(w, "could not delete set", err)
 		return
 	}
@@ -405,7 +399,7 @@ func (s *Server) handleBindSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{
-		SetName: set.Name, HostID: hostID, Action: "deliver", Actor: auth.UserID,
+		SetID: setID, SetName: set.Name, HostID: hostID, Action: "deliver", Actor: auth.UserID,
 	}); err != nil {
 		serverError(w, "could not bind set", err)
 		return
@@ -510,7 +504,7 @@ func (s *Server) handleUpsertSetEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{
-		SetName: set.Name, EntryKey: pgText(key), Action: "edit", Actor: auth.UserID,
+		SetID: setID, SetName: set.Name, EntryKey: pgText(key), Action: "edit", Actor: auth.UserID,
 	}); err != nil {
 		serverError(w, "could not update entry", err)
 		return
@@ -567,7 +561,7 @@ func (s *Server) handleDeleteSetEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := q.InsertSetAudit(r.Context(), db.InsertSetAuditParams{
-		SetName: set.Name, EntryKey: pgText(key), Action: "edit", Actor: auth.UserID,
+		SetID: setID, SetName: set.Name, EntryKey: pgText(key), Action: "edit", Actor: auth.UserID,
 	}); err != nil {
 		serverError(w, "could not delete entry", err)
 		return
@@ -612,7 +606,7 @@ func (s *Server) handleSetAudit(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not load set", err)
 		return
 	}
-	rows, err := s.q.ListSetAudit(r.Context(), set.Name)
+	rows, err := s.q.ListSetAudit(r.Context(), db.ListSetAuditParams{SetID: setID, SetName: set.Name})
 	if err != nil {
 		serverError(w, "could not load audit", err)
 		return

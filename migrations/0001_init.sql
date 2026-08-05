@@ -261,6 +261,7 @@ create index on grant_audit_logs (grant_id, at);
 -- Immutable trail of set edits and machine deliveries/reads.
 create table set_audit_logs (
   id        uuid primary key default gen_random_uuid(),
+  set_id    uuid,                            -- historical ref; no FK so deletion keeps history
   set_name  text not null,                   -- denormalized: survives deletion
   entry_key text,                            -- null for whole-set actions
   host_id   uuid,                            -- who consumed it (machine actions)
@@ -268,6 +269,7 @@ create table set_audit_logs (
   actor     uuid,                            -- historical ref, no FK
   at        timestamptz not null default now()
 );
+create index on set_audit_logs (set_id, at);
 create index on set_audit_logs (at);
 
 -- +goose StatementBegin

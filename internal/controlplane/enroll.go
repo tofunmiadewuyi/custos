@@ -85,8 +85,13 @@ func (s *Server) enroll(ctx context.Context, req protocol.EnrollRequest) (string
 		}
 	}
 
+	name := req.Hostname
+	if tok.Label.Valid && tok.Label.String != "" {
+		name = tok.Label.String
+	}
+
 	host, err := q.CreateHost(ctx, db.CreateHostParams{
-		Name:          req.Hostname,
+		Name:          name,
 		Hostname:      req.Hostname,
 		IdentityKey:   req.PublicKey,
 		Accounts:      tok.Accounts,

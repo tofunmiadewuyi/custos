@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/tofunmiadewuyi/custos/internal/daemon"
 )
@@ -19,6 +20,9 @@ func cmdEnroll(args []string) {
 
 	if *controlPlane == "" || *token == "" {
 		fatal("enroll: --control-plane and --token are required")
+	}
+	if os.Geteuid() == 0 && filepath.Clean(*dir) == daemon.DefaultDir {
+		fatal("enroll: do not run as root for %s; use: sudo -u custos /usr/local/bin/custosd enroll --control-plane <url> --token <token> --dir %s", daemon.DefaultDir, daemon.DefaultDir)
 	}
 	host := *hostname
 	if host == "" {

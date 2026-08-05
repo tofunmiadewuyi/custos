@@ -195,6 +195,7 @@ type Session struct {
 
 type SetAuditLog struct {
 	ID       pgtype.UUID
+	SetID    pgtype.UUID
 	SetName  string
 	EntryKey pgtype.Text
 	HostID   pgtype.UUID

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -26,9 +27,11 @@ func cmdStatus(args []string) {
 	fmt.Printf("custosd %s\n", version)
 	fmt.Printf("%-16s %s\n", "state dir:", *dir)
 
-	if !store.Enrolled() {
+	if err := store.EnrollmentError(); errors.Is(err, os.ErrNotExist) {
 		fmt.Printf("%-16s no (run `custosd enroll` first)\n", "enrolled:")
 		return
+	} else if err != nil {
+		fatal("status: cannot read enrollment state in %s: %v", *dir, err)
 	}
 	cfg, err := store.LoadConfig()
 	if err != nil {

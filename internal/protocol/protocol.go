@@ -26,15 +26,24 @@ type EnrollResponse struct {
 	SigningPublicKey string `json:"signing_public_key"` // control plane's ed25519 snapshot-signing key, base64
 }
 
+type DecommissionRequest struct {
+	At        time.Time `json:"at"`
+	Signature []byte    `json:"signature"`
+}
+
+func DecommissionSigningInput(hostID string, at time.Time) []byte {
+	return []byte("custos-host-decommission:v1:" + hostID + ":" + at.UTC().Format(time.RFC3339Nano))
+}
+
 // MessageType tags an Envelope so the receiver knows how to decode Data.
 type MessageType string
 
 const (
 	// control plane -> daemon
-	TypeChallenge MessageType = "challenge"
-	TypeSnapshot  MessageType = "snapshot"
-	TypeGrant     MessageType = "grant"
-	TypeRevoke    MessageType = "revoke"
+	TypeChallenge  MessageType = "challenge"
+	TypeSnapshot   MessageType = "snapshot"
+	TypeGrant      MessageType = "grant"
+	TypeRevoke     MessageType = "revoke"
 	TypePing       MessageType = "ping"
 	TypeUpgrade    MessageType = "upgrade"
 	TypeSecretSets MessageType = "secret_sets"

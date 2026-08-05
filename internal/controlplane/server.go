@@ -72,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) publicRoutes(r chi.Router) {
 	r.Use(s.authRL.middleware)
 	r.Post("/enroll", s.handleEnroll)
+	r.Post("/hosts/{id}/decommission", s.handleDecommissionHost)
 	r.Post("/login", s.handleLogin)
 	r.Post("/refresh", s.handleRefresh)
 	r.Post("/invitations/accept", s.handleAcceptInvitation)
@@ -88,6 +89,7 @@ func (s *Server) userRoutes(r chi.Router) {
 	r.Get("/me", s.handleMe)
 	r.Patch("/me", s.handleUpdateProfile)
 	r.Post("/logout", s.handleLogout)
+	r.Post("/enroll-tokens", s.handleCreateEnrollToken)
 
 	r.Route("/keys", func(r chi.Router) {
 		r.Post("/", s.handleAddKey)
@@ -125,7 +127,8 @@ func (s *Server) userRoutes(r chi.Router) {
 		r.Delete("/{id}/entries/{key}", s.handleDeleteSetEntry)
 	})
 
-	// Host detail/audit and set binding are self-gated on host.access; the rest of /hosts is admin.
+	// Host list/detail/audit and set binding are self-gated on host.access; host lifecycle stays admin.
+	r.Get("/hosts", s.handleListHosts)
 	r.Get("/hosts/{id}", s.handleGetHost)
 	r.Get("/hosts/{id}/audit", s.handleHostAudit)
 	r.Post("/hosts/{id}/sets", s.handleBindSet)
@@ -135,7 +138,6 @@ func (s *Server) userRoutes(r chi.Router) {
 // adminRoutes require an admin session.
 func (s *Server) adminRoutes(r chi.Router) {
 	r.Use(s.requireAdmin)
-	r.Post("/enroll-tokens", s.handleCreateEnrollToken)
 	r.Post("/upgrade", s.handleUpgradeFleet)
 	r.Get("/audit", s.handleAllAudit)
 	r.Get("/grant-audit", s.handleGrantAudit)
@@ -143,7 +145,6 @@ func (s *Server) adminRoutes(r chi.Router) {
 	r.Get("/hosts/{id}/access-audit", s.handleHostAccessAudit)
 
 	// /hosts and /invitations stay flat: each spans tiers (/hosts/{id}/sets is user, /invitations/accept is public).
-	r.Get("/hosts", s.handleListHosts)
 	r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
 	r.Post("/hosts/{id}/upgrade", s.handleUpgradeHost)
 

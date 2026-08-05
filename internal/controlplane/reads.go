@@ -93,26 +93,38 @@ type hostView struct {
 }
 
 func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.q.ListHosts(r.Context())
-	if err != nil {
-		serverError(w, "could not list hosts", err)
-		return
+	auth := authFrom(r.Context())
+	views := []hostView{}
+	if auth.Role == "admin" {
+		rows, err := s.q.ListHosts(r.Context())
+		if err != nil {
+			serverError(w, "could not list hosts", err)
+			return
+		}
+		for _, h := range rows {
+			views = append(views, hostView{
+				ID: uuidString(h.ID), Name: h.Name, Hostname: h.Hostname,
+				Accounts: h.Accounts, Status: h.Status,
+				AgentVersion: h.AgentVersion, DesiredVersion: h.DesiredVersion,
+				EnrolledAt: h.EnrolledAt.Time, LastSeenAt: nullTime(h.LastSeenAt),
+			})
+		}
+	} else {
+		rows, err := s.q.ListReadableHosts(r.Context(), auth.UserID)
+		if err != nil {
+			serverError(w, "could not list hosts", err)
+			return
+		}
+		for _, h := range rows {
+			views = append(views, hostView{
+				ID: uuidString(h.ID), Name: h.Name, Hostname: h.Hostname,
+				Accounts: h.Accounts, Status: h.Status,
+				AgentVersion: h.AgentVersion, DesiredVersion: h.DesiredVersion,
+				EnrolledAt: h.EnrolledAt.Time, LastSeenAt: nullTime(h.LastSeenAt),
+			})
+		}
 	}
-	views := make([]hostView, 0, len(rows))
-	for _, h := range rows {
-		views = append(views, hostView{
-			ID:             uuidString(h.ID),
-			Name:           h.Name,
-			Hostname:       h.Hostname,
-			Accounts:       h.Accounts,
-			Status:         h.Status,
-			AgentVersion:   h.AgentVersion,
-			DesiredVersion: h.DesiredVersion,
-			EnrolledAt:     h.EnrolledAt.Time,
-			LastSeenAt:     nullTime(h.LastSeenAt),
-		})
-	}
-	s.writeResponse(w, authFrom(r.Context()).ClientPublicKey, views)
+	s.writeResponse(w, auth.ClientPublicKey, views)
 }
 
 type grantView struct {

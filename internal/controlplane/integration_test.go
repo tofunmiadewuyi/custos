@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
 	"github.com/tofunmiadewuyi/custos/internal/hybrid"
+	"github.com/tofunmiadewuyi/custos/internal/identity"
 	"github.com/tofunmiadewuyi/custos/internal/protocol"
 	"github.com/tofunmiadewuyi/custos/migrations"
 )
@@ -244,7 +246,7 @@ func seedHostKey(t *testing.T, pool *pgxpool.Pool, accounts []string, encKey str
 	var id string
 	if err := pool.QueryRow(context.Background(),
 		`insert into hosts (name, hostname, identity_key, accounts, status, encryption_key)
-		 values ('h', 'h', 'hostkey', $1, 'active', $2) returning id`, accounts, encKey).Scan(&id); err != nil {
+		 values ('h', 'h', 'hostkey-' || gen_random_uuid()::text, $1, 'active', $2) returning id`, accounts, encKey).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -319,6 +321,67 @@ func TestAuthzMatrix(t *testing.T) {
 
 		requireCode(t, do(t, h, member, "GET", "/secrets/"+s2, ""), http.StatusOK)
 	})
+
+	t.Run("members can create enrollment tokens", func(t *testing.T) {
+		rec := do(t, h, member, "POST", "/enroll-tokens", `{"label":"member-host","accounts":["deploy"],"ttl_hours":1}`)
+		requireCode(t, rec, http.StatusOK)
+		var tokenResp struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &tokenResp); err != nil {
+			t.Fatal(err)
+		}
+		if tokenResp.Token == "" {
+			t.Fatalf("expected enrollment token response, got %s", rec.Body.String())
+		}
+
+		enrollBody := fmt.Sprintf(
+			`{"token":%q,"hostname":"actual-hostname","public_key":"hostkey-labeled","encryption_key":"enckey-labeled","machine_id":"machine-labeled"}`,
+			tokenResp.Token,
+		)
+		rec = do(t, h, "", "POST", "/enroll", enrollBody)
+		requireCode(t, rec, http.StatusOK)
+		var enrollResp struct {
+			HostID string `json:"host_id"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &enrollResp); err != nil {
+			t.Fatal(err)
+		}
+		host := getHost(t, s, enrollResp.HostID)
+		if host.Name != "member-host" || host.Hostname != "actual-hostname" {
+			t.Fatalf("token label should become host name while hostname stays factual: name=%q hostname=%q", host.Name, host.Hostname)
+		}
+	})
+
+	t.Run("host list is scoped to host.access", func(t *testing.T) {
+		allowedHostID := seedHost(t, s.pool, []string{"deploy"})
+		seedHost(t, s.pool, []string{"deploy"})
+		grantVia(t, h, admin, memberID, "host.access", "host", allowedHostID)
+
+		rec := do(t, h, member, "GET", "/hosts", "")
+		requireCode(t, rec, http.StatusOK)
+		var memberHosts []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &memberHosts); err != nil {
+			t.Fatal(err)
+		}
+		if len(memberHosts) != 1 || memberHosts[0].ID != allowedHostID {
+			t.Fatalf("expected only granted host, got %s", rec.Body.String())
+		}
+
+		rec = do(t, h, admin, "GET", "/hosts", "")
+		requireCode(t, rec, http.StatusOK)
+		var adminHosts []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &adminHosts); err != nil {
+			t.Fatal(err)
+		}
+		if len(adminHosts) < 2 {
+			t.Fatalf("expected admin to see all active hosts, got %s", rec.Body.String())
+		}
+	})
 }
 
 // TestSuspendCutsSSH guards the one invariant that severs a suspended user from
@@ -341,6 +404,36 @@ func TestSuspendCutsSSH(t *testing.T) {
 
 	if snapshotHas(t, s, host, fp) {
 		t.Fatal("suspended user's key must be gone from the snapshot")
+	}
+}
+
+func TestHostDecommission(t *testing.T) {
+	s, _ := newTestServer(t)
+	h := s.Handler()
+	kp, err := identity.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hostID string
+	if err := s.pool.QueryRow(context.Background(),
+		`insert into hosts (name, hostname, identity_key, accounts, status)
+		 values ('h', 'h', $1, '{deploy}', 'active') returning id`, kp.PublicKey()).Scan(&hostID); err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().UTC()
+	body, err := json.Marshal(protocol.DecommissionRequest{
+		At:        at,
+		Signature: kp.Sign(protocol.DecommissionSigningInput(hostID, at)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireCode(t, do(t, h, "", "POST", "/hosts/"+hostID+"/decommission", string(body)), http.StatusNoContent)
+
+	host := getHost(t, s, hostID)
+	if host.Status != "revoked" {
+		t.Fatalf("host should be revoked after decommission, got %q", host.Status)
 	}
 }
 

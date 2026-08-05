@@ -148,7 +148,9 @@ func (q *Queries) ListActiveHosts(ctx context.Context) ([]ListActiveHostsRow, er
 
 const listHosts = `-- name: ListHosts :many
 select id, name, hostname, accounts, status, agent_version, desired_version, enrolled_at, last_seen_at
-from hosts order by name
+from hosts
+where status = 'active'
+order by name
 `
 
 type ListHostsRow struct {
@@ -172,6 +174,62 @@ func (q *Queries) ListHosts(ctx context.Context) ([]ListHostsRow, error) {
 	items := []ListHostsRow{}
 	for rows.Next() {
 		var i ListHostsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Hostname,
+			&i.Accounts,
+			&i.Status,
+			&i.AgentVersion,
+			&i.DesiredVersion,
+			&i.EnrolledAt,
+			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReadableHosts = `-- name: ListReadableHosts :many
+select distinct h.id, h.name, h.hostname, h.accounts, h.status, h.agent_version, h.desired_version,
+       h.enrolled_at, h.last_seen_at
+from hosts h
+join grants g on g.user_id = $1 and g.permission = 'host.access' and g.revoked_at is null
+  and (
+    (g.target_kind = 'host' and g.target_id = h.id)
+    or (g.target_kind = 'group' and g.target_id in (
+      select group_id from group_resources where resource_kind = 'host' and resource_id = h.id))
+  )
+where h.status = 'active'
+order by h.name
+`
+
+type ListReadableHostsRow struct {
+	ID             pgtype.UUID
+	Name           string
+	Hostname       string
+	Accounts       []string
+	Status         string
+	AgentVersion   string
+	DesiredVersion string
+	EnrolledAt     pgtype.Timestamptz
+	LastSeenAt     pgtype.Timestamptz
+}
+
+func (q *Queries) ListReadableHosts(ctx context.Context, userID pgtype.UUID) ([]ListReadableHostsRow, error) {
+	rows, err := q.db.Query(ctx, listReadableHosts, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListReadableHostsRow{}
+	for rows.Next() {
+		var i ListReadableHostsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Name,

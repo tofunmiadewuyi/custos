@@ -40,14 +40,74 @@ design.
 
 ### Enroll a host
 
-6. Via the API (as admin): **log in**, then **create an enrollment token** (`POST /enroll-tokens`,
-   with the host's managed unix accounts).
-7. On the host, as root: **`sudo custosd install`** — creates the `custos` user, installs the binary to
-   `/usr/local/bin`, writes the systemd unit, and wires sshd (`AuthorizedKeysCommand`).
-8. **Enroll** as the custos user:
-   `sudo -u custos custosd enroll --control-plane $URL --token $TOKEN --dir /var/lib/custos`
-   (generates the host's Ed25519 identity + X25519 encryption keys, registers their public halves).
-9. **Start:** `sudo systemctl enable --now custosd`.
+6. Via the API (as admin): **log in**, then create an enrollment token with the host's managed Unix
+   accounts:
+
+   ```bash
+   curl -sS -X POST "$CUSTOS_URL/enroll-tokens" \
+     -H "Authorization: Bearer $ADMIN_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"label":"app-01","accounts":["deploy"],"ttl_hours":1}'
+   ```
+
+   Save the returned `token`.
+
+7. On the Linux host, install `custosd` as root. This is the machine setup step: it creates the
+   `custos` system user, installs `/usr/local/bin/custosd`, creates `/var/lib/custos`, writes the
+   systemd unit, and wires sshd's `AuthorizedKeysCommand`. Downloading/curling the binary alone is
+   enough to run `enroll`, but it does not configure sshd or systemd.
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/tofunmiadewuyi/custos/main/install.sh | sudo bash
+   ```
+
+   To pin a daemon release:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/tofunmiadewuyi/custos/main/install.sh \
+     | sudo CUSTOS_VERSION=v1.2.3 bash
+   ```
+
+   If you already built or copied a local `custosd` binary onto the host, run:
+
+   ```bash
+   sudo ./custosd install
+   ```
+
+8. Enroll the host as the `custos` user. Do not run this as plain `sudo custosd enroll`: that writes
+   root-owned state under `/var/lib/custos`, and the daemon service runs as `custos`.
+
+   ```bash
+   sudo -u custos /usr/local/bin/custosd enroll \
+     --control-plane "$CUSTOS_URL" \
+     --token "$ENROLLMENT_TOKEN" \
+     --dir /var/lib/custos
+   ```
+
+   This generates the host's Ed25519 identity key and X25519 encryption key, then registers their
+   public halves with the control plane.
+
+9. Start the daemon:
+
+   ```bash
+   sudo systemctl enable --now custosd
+   sudo systemctl status custosd
+   sudo -u custos /usr/local/bin/custosd status --dir /var/lib/custos
+   ```
+
+   If sshd was not automatically wired, the installer prints the drop-in config to create manually;
+   after adding it, run `sudo sshd -t && sudo systemctl reload ssh`.
+
+   To remove the daemon from a host:
+
+   ```bash
+   sudo /usr/local/bin/custosd uninstall
+   ```
+
+   `uninstall` notifies the control plane using the host's daemon identity, marks the host revoked,
+   stops the systemd service, removes the sshd hook, and removes the installed binary. Use
+   `--skip-control-plane` only when the control plane is unreachable and you plan to revoke the host
+   manually.
 
 ### Grant SSH access
 

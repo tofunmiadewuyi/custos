@@ -4,6 +4,9 @@ insert into secret_sets (name, created_by) values ($1, $2) returning *;
 -- name: GetSet :one
 select * from secret_sets where id = $1;
 
+-- name: GetSetByName :one
+select * from secret_sets where name = $1;
+
 -- name: UpdateSetName :one
 update secret_sets set name = $2, updated_at = now() where id = $1 returning *;
 
@@ -87,17 +90,14 @@ update secret_sets set updated_at = now() where id = $1;
 delete from secret_sets where id = $1;
 
 -- name: InsertSetAudit :exec
-insert into set_audit_logs (set_name, entry_key, host_id, action, actor)
-values ($1, $2, $3, $4, $5);
-
--- name: RenameSetAuditLogs :exec
-update set_audit_logs set set_name = $2 where set_name = $1;
+insert into set_audit_logs (set_id, set_name, entry_key, host_id, action, actor)
+values ($1, $2, $3, $4, $5, $6);
 
 -- name: ListSetAudit :many
 select a.action, a.set_name, a.entry_key, a.host_id, a.actor, u.email as actor_email,
        u.name as actor_name, u.display_name as actor_display_name, a.at
 from set_audit_logs a
 left join users u on u.id = a.actor
-where a.set_name = $1
+where a.set_id = @set_id or (a.set_id is null and a.set_name = @set_name)
 order by a.at desc
 limit 100;

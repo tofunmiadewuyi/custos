@@ -55,8 +55,13 @@ func OpenStore(dir string) (*Store, error) {
 
 // Enrolled reports whether this host has an identity key yet.
 func (s *Store) Enrolled() bool {
+	return s.EnrollmentError() == nil
+}
+
+// EnrollmentError reports why the identity key cannot be found/read.
+func (s *Store) EnrollmentError() error {
 	_, err := os.Stat(s.path(identityFile))
-	return err == nil
+	return err
 }
 
 func (s *Store) LoadConfig() (Config, error) {

@@ -136,6 +136,23 @@ func (q *Queries) GetSet(ctx context.Context, id pgtype.UUID) (SecretSet, error)
 	return i, err
 }
 
+const getSetByName = `-- name: GetSetByName :one
+select id, name, created_by, created_at, updated_at from secret_sets where name = $1
+`
+
+func (q *Queries) GetSetByName(ctx context.Context, name string) (SecretSet, error) {
+	row := q.db.QueryRow(ctx, getSetByName, name)
+	var i SecretSet
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedBy,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getSetEntries = `-- name: GetSetEntries :many
 select key, ciphertext, nonce, wrapped_key from secret_set_entries where set_id = $1 order by key
 `
@@ -197,11 +214,12 @@ func (q *Queries) HostsForSet(ctx context.Context, setID pgtype.UUID) ([]pgtype.
 }
 
 const insertSetAudit = `-- name: InsertSetAudit :exec
-insert into set_audit_logs (set_name, entry_key, host_id, action, actor)
-values ($1, $2, $3, $4, $5)
+insert into set_audit_logs (set_id, set_name, entry_key, host_id, action, actor)
+values ($1, $2, $3, $4, $5, $6)
 `
 
 type InsertSetAuditParams struct {
+	SetID    pgtype.UUID
 	SetName  string
 	EntryKey pgtype.Text
 	HostID   pgtype.UUID
@@ -211,6 +229,7 @@ type InsertSetAuditParams struct {
 
 func (q *Queries) InsertSetAudit(ctx context.Context, arg InsertSetAuditParams) error {
 	_, err := q.db.Exec(ctx, insertSetAudit,
+		arg.SetID,
 		arg.SetName,
 		arg.EntryKey,
 		arg.HostID,
@@ -328,10 +347,15 @@ select a.action, a.set_name, a.entry_key, a.host_id, a.actor, u.email as actor_e
        u.name as actor_name, u.display_name as actor_display_name, a.at
 from set_audit_logs a
 left join users u on u.id = a.actor
-where a.set_name = $1
+where a.set_id = $1 or (a.set_id is null and a.set_name = $2)
 order by a.at desc
 limit 100
 `
+
+type ListSetAuditParams struct {
+	SetID   pgtype.UUID
+	SetName string
+}
 
 type ListSetAuditRow struct {
 	Action           string
@@ -345,8 +369,8 @@ type ListSetAuditRow struct {
 	At               pgtype.Timestamptz
 }
 
-func (q *Queries) ListSetAudit(ctx context.Context, setName string) ([]ListSetAuditRow, error) {
-	rows, err := q.db.Query(ctx, listSetAudit, setName)
+func (q *Queries) ListSetAudit(ctx context.Context, arg ListSetAuditParams) ([]ListSetAuditRow, error) {
+	rows, err := q.db.Query(ctx, listSetAudit, arg.SetID, arg.SetName)
 	if err != nil {
 		return nil, err
 	}
@@ -442,20 +466,6 @@ func (q *Queries) ListSets(ctx context.Context) ([]ListSetsRow, error) {
 		return nil, err
 	}
 	return items, nil
-}
-
-const renameSetAuditLogs = `-- name: RenameSetAuditLogs :exec
-update set_audit_logs set set_name = $2 where set_name = $1
-`
-
-type RenameSetAuditLogsParams struct {
-	SetName   string
-	SetName_2 string
-}
-
-func (q *Queries) RenameSetAuditLogs(ctx context.Context, arg RenameSetAuditLogsParams) error {
-	_, err := q.db.Exec(ctx, renameSetAuditLogs, arg.SetName, arg.SetName_2)
-	return err
 }
 
 const setsForHost = `-- name: SetsForHost :many
