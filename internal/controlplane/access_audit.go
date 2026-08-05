@@ -109,13 +109,17 @@ type hostAccessAuditView struct {
 	Entries  []accessEntry `json:"entries"`
 }
 
-// handleHostAccessAudit (admin) reports who can SSH to a host: directly, via a
-// group the host belongs to, or unconditionally as an active admin.
+// handleHostAccessAudit reports who can SSH to a host: directly, via a group the
+// host belongs to, or unconditionally as an active admin.
 func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 	auth := authFrom(r.Context())
 	hostID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid host id", http.StatusBadRequest)
+		return
+	}
+	if !s.canHost(r.Context(), auth, "host.audit", hostID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 

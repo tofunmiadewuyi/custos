@@ -52,6 +52,7 @@ type secretView struct {
 	UpdatedBy    *actor    `json:"updated_by"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
+	Permissions  []string  `json:"permissions"`
 }
 
 type secretDetailView struct {
@@ -141,6 +142,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 				CreatedBy: actorOf(row.CreatedBy, row.CreatedByName, row.CreatedByDisplayName, row.CreatedByEmail),
 				UpdatedBy: actorOf(row.UpdatedBy, row.UpdatedByName, row.UpdatedByDisplayName, row.UpdatedByEmail),
 				CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+				Permissions: s.secretPermissions(r.Context(), auth, row.ID),
 			})
 		}
 	} else {
@@ -156,6 +158,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 				CreatedBy: actorOf(row.CreatedBy, row.CreatedByName, row.CreatedByDisplayName, row.CreatedByEmail),
 				UpdatedBy: actorOf(row.UpdatedBy, row.UpdatedByName, row.UpdatedByDisplayName, row.UpdatedByEmail),
 				CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+				Permissions: s.secretPermissions(r.Context(), auth, row.ID),
 			})
 		}
 	}
@@ -184,7 +187,7 @@ func (s *Server) handleGetSecret(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not read secret", err)
 		return
 	}
-	s.writeResponse(w, auth.ClientPublicKey, secretViewFromGet(row))
+	s.writeResponse(w, auth.ClientPublicKey, s.secretViewFromGet(r.Context(), auth, row))
 }
 
 // handleRevealSecret decrypts and returns the sealed fields, and logs the read —
@@ -220,7 +223,7 @@ func (s *Server) handleRevealSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	s.auditSecret(r.Context(), row.ID, row.Label, "read", auth.UserID)
 	s.writeResponse(w, auth.ClientPublicKey, secretDetailView{
-		secretView: secretViewFromGet(row),
+		secretView: s.secretViewFromGet(r.Context(), auth, row),
 		Password:   fields.Password,
 		Notes:      fields.Notes,
 	})
@@ -315,7 +318,7 @@ func (s *Server) respondSecret(w http.ResponseWriter, r *http.Request, auth auth
 		serverError(w, "could not load secret", err)
 		return
 	}
-	s.writeResponse(w, auth.ClientPublicKey, secretViewFromGet(row))
+	s.writeResponse(w, auth.ClientPublicKey, s.secretViewFromGet(r.Context(), auth, row))
 }
 
 // sealFields packs the secret fields into one JSON blob and seals it. Returns
@@ -357,7 +360,7 @@ func (s *Server) auditSecret(ctx context.Context, secretID pgtype.UUID, label, a
 	})
 }
 
-func secretViewFromGet(row db.GetSecretRow) secretView {
+func (s *Server) secretViewFromGet(ctx context.Context, auth authInfo, row db.GetSecretRow) secretView {
 	return secretView{
 		ID:           uuidString(row.ID),
 		Label:        row.Label,
@@ -368,6 +371,7 @@ func secretViewFromGet(row db.GetSecretRow) secretView {
 		UpdatedBy:    actorOf(row.UpdatedBy, row.UpdatedByName, row.UpdatedByDisplayName, row.UpdatedByEmail),
 		CreatedAt:    row.CreatedAt.Time,
 		UpdatedAt:    row.UpdatedAt.Time,
+		Permissions:  s.secretPermissions(ctx, auth, row.ID),
 	}
 }
 

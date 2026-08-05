@@ -24,7 +24,12 @@ order by ss.name;
 select distinct ss.id, ss.name, ss.created_at, ss.updated_at, coalesce(k.key_count, 0)::bigint as key_count
 from secret_sets ss
 join grants g on g.permission = 'set.read' and g.revoked_at is null
-  and g.target_kind = 'set' and g.target_id = ss.id
+  and (
+    (g.target_kind = 'set' and g.target_id = ss.id)
+    or (g.target_kind = 'group' and g.target_id in (
+      select group_id from group_resources
+      where resource_kind = 'set' and resource_id = ss.id))
+  )
 left join (
   select set_id, count(*) as key_count
   from secret_set_entries

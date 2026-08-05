@@ -8,6 +8,13 @@ import (
 	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
 )
 
+var (
+	allGroupPermissions  = []string{"group.read", "group.manage"}
+	allHostPermissions   = []string{"host.access", "host.audit", "host.revoke", "host.upgrade"}
+	allSecretPermissions = []string{"secret.read", "secret.update", "secret.delete"}
+	allSetPermissions    = []string{"set.read", "set.manage"}
+)
+
 // canGlobal reports whether the user may perform a global-scoped action.
 // Admins bypass grants entirely.
 func (s *Server) canGlobal(ctx context.Context, a authInfo, permission string) bool {
@@ -18,6 +25,40 @@ func (s *Server) canGlobal(ctx context.Context, a authInfo, permission string) b
 		UserID: a.UserID, Permission: permission,
 	})
 	return err == nil && ok
+}
+
+func (s *Server) groupPermissions(ctx context.Context, a authInfo, groupID pgtype.UUID) []string {
+	return filterPermissions(allGroupPermissions, func(permission string) bool {
+		return s.canGroup(ctx, a, permission, groupID)
+	})
+}
+
+func (s *Server) hostPermissions(ctx context.Context, a authInfo, hostID pgtype.UUID) []string {
+	return filterPermissions(allHostPermissions, func(permission string) bool {
+		return s.canHost(ctx, a, permission, hostID)
+	})
+}
+
+func (s *Server) secretPermissions(ctx context.Context, a authInfo, secretID pgtype.UUID) []string {
+	return filterPermissions(allSecretPermissions, func(permission string) bool {
+		return s.canSecret(ctx, a, permission, secretID)
+	})
+}
+
+func (s *Server) setPermissions(ctx context.Context, a authInfo, setID pgtype.UUID) []string {
+	return filterPermissions(allSetPermissions, func(permission string) bool {
+		return s.canSet(ctx, a, permission, setID)
+	})
+}
+
+func filterPermissions(candidates []string, allowed func(string) bool) []string {
+	permissions := make([]string, 0, len(candidates))
+	for _, permission := range candidates {
+		if allowed(permission) {
+			permissions = append(permissions, permission)
+		}
+	}
+	return permissions
 }
 
 // canSecret reports whether the user holds permission on a specific secret,

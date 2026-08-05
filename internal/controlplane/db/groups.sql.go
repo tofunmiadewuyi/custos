@@ -78,14 +78,54 @@ func (q *Queries) GetGroup(ctx context.Context, id pgtype.UUID) (ResourceGroup, 
 }
 
 const listGroupResources = `-- name: ListGroupResources :many
-select resource_kind, resource_id, added_at
-from group_resources where group_id = $1 order by added_at
+select gr.resource_kind, gr.resource_id, gr.added_at,
+       h.id as host_id, coalesce(h.name, '') as host_name, coalesce(h.hostname, '') as host_hostname,
+       coalesce(h.accounts, '{}'::text[]) as host_accounts, coalesce(h.status, '') as host_status,
+       coalesce(h.agent_version, '') as host_agent_version, coalesce(h.desired_version, '') as host_desired_version,
+       h.enrolled_at as host_enrolled_at, h.last_seen_at as host_last_seen_at,
+       s.id as secret_id, coalesce(s.label, '') as secret_label, s.url as secret_url,
+       s.username as secret_username, s.otp_recipient as secret_otp_recipient,
+       s.created_at as secret_created_at, s.updated_at as secret_updated_at,
+       ss.id as set_id, coalesce(ss.name, '') as set_name, ss.created_at as set_created_at,
+       ss.updated_at as set_updated_at, coalesce(k.key_count, 0)::bigint as set_key_count
+from group_resources gr
+left join hosts h on gr.resource_kind = 'host' and h.id = gr.resource_id
+left join secrets s on gr.resource_kind = 'secret' and s.id = gr.resource_id
+left join secret_sets ss on gr.resource_kind = 'set' and ss.id = gr.resource_id
+left join (
+  select set_id, count(*) as key_count
+  from secret_set_entries
+  group by set_id
+) k on k.set_id = ss.id
+where gr.group_id = $1
+order by gr.added_at
 `
 
 type ListGroupResourcesRow struct {
-	ResourceKind string
-	ResourceID   pgtype.UUID
-	AddedAt      pgtype.Timestamptz
+	ResourceKind       string
+	ResourceID         pgtype.UUID
+	AddedAt            pgtype.Timestamptz
+	HostID             pgtype.UUID
+	HostName           string
+	HostHostname       string
+	HostAccounts       []string
+	HostStatus         string
+	HostAgentVersion   string
+	HostDesiredVersion string
+	HostEnrolledAt     pgtype.Timestamptz
+	HostLastSeenAt     pgtype.Timestamptz
+	SecretID           pgtype.UUID
+	SecretLabel        string
+	SecretUrl          pgtype.Text
+	SecretUsername     pgtype.Text
+	SecretOtpRecipient pgtype.Text
+	SecretCreatedAt    pgtype.Timestamptz
+	SecretUpdatedAt    pgtype.Timestamptz
+	SetID              pgtype.UUID
+	SetName            string
+	SetCreatedAt       pgtype.Timestamptz
+	SetUpdatedAt       pgtype.Timestamptz
+	SetKeyCount        int64
 }
 
 func (q *Queries) ListGroupResources(ctx context.Context, groupID pgtype.UUID) ([]ListGroupResourcesRow, error) {
@@ -97,7 +137,32 @@ func (q *Queries) ListGroupResources(ctx context.Context, groupID pgtype.UUID) (
 	items := []ListGroupResourcesRow{}
 	for rows.Next() {
 		var i ListGroupResourcesRow
-		if err := rows.Scan(&i.ResourceKind, &i.ResourceID, &i.AddedAt); err != nil {
+		if err := rows.Scan(
+			&i.ResourceKind,
+			&i.ResourceID,
+			&i.AddedAt,
+			&i.HostID,
+			&i.HostName,
+			&i.HostHostname,
+			&i.HostAccounts,
+			&i.HostStatus,
+			&i.HostAgentVersion,
+			&i.HostDesiredVersion,
+			&i.HostEnrolledAt,
+			&i.HostLastSeenAt,
+			&i.SecretID,
+			&i.SecretLabel,
+			&i.SecretUrl,
+			&i.SecretUsername,
+			&i.SecretOtpRecipient,
+			&i.SecretCreatedAt,
+			&i.SecretUpdatedAt,
+			&i.SetID,
+			&i.SetName,
+			&i.SetCreatedAt,
+			&i.SetUpdatedAt,
+			&i.SetKeyCount,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -126,6 +191,59 @@ func (q *Queries) ListGroups(ctx context.Context) ([]ResourceGroup, error) {
 			&i.Name,
 			&i.Description,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listGroupMembers = `-- name: ListGroupMembers :many
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
+       g.id as grant_id, g.permission, g.created_at as granted_at
+from grants g
+join users u on u.id = g.user_id
+where g.target_kind = 'group'
+  and g.target_id = $1
+  and g.revoked_at is null
+order by u.email, g.permission
+`
+
+type ListGroupMembersRow struct {
+	UserID      pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
+	Status      string
+	GrantID     pgtype.UUID
+	Permission  string
+	GrantedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) ListGroupMembers(ctx context.Context, targetID pgtype.UUID) ([]ListGroupMembersRow, error) {
+	rows, err := q.db.Query(ctx, listGroupMembers, targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGroupMembersRow{}
+	for rows.Next() {
+		var i ListGroupMembersRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.DisplayName,
+			&i.Role,
+			&i.Status,
+			&i.GrantID,
+			&i.Permission,
+			&i.GrantedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -198,4 +316,29 @@ where target_kind = 'group' and target_id = $1 and revoked_at is null
 func (q *Queries) RevokeGroupGrants(ctx context.Context, targetID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, revokeGroupGrants, targetID)
 	return err
+}
+
+const updateGroup = `-- name: UpdateGroup :one
+update resource_groups
+set name = $2, description = $3
+where id = $1
+returning id, name, description, created_at
+`
+
+type UpdateGroupParams struct {
+	ID          pgtype.UUID
+	Name        string
+	Description string
+}
+
+func (q *Queries) UpdateGroup(ctx context.Context, arg UpdateGroupParams) (ResourceGroup, error) {
+	row := q.db.QueryRow(ctx, updateGroup, arg.ID, arg.Name, arg.Description)
+	var i ResourceGroup
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.CreatedAt,
+	)
+	return i, err
 }

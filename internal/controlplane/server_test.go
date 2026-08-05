@@ -26,7 +26,7 @@ func TestRoutesResolve(t *testing.T) {
 	cases := []struct{ method, path string }{
 		{"GET", "/keys"}, {"DELETE", "/keys/x"},
 		{"GET", "/secrets"}, {"GET", "/secrets/x/audit"},
-		{"GET", "/groups"}, {"POST", "/groups/x/resources"},
+		{"GET", "/groups"}, {"GET", "/groups/x/members"}, {"PUT", "/groups/x"}, {"POST", "/groups/x/resources"},
 		{"GET", "/sets"}, {"PUT", "/sets/x/entries/KEY"},
 		{"POST", "/hosts/x/sets"}, {"GET", "/hosts/x"}, {"GET", "/hosts/x/audit"},
 		{"GET", "/users"}, {"POST", "/users/x/suspend"},
@@ -46,7 +46,7 @@ func TestRoutesResolve(t *testing.T) {
 func TestEnrollRejectsBadRequest(t *testing.T) {
 	s := NewServer(Config{}, nil)
 	cases := map[string]string{
-		"invalid json":  "{not json",
+		"invalid json":   "{not json",
 		"missing fields": `{"hostname":"h"}`,
 	}
 	for name, body := range cases {

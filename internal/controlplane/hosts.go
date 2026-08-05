@@ -54,8 +54,11 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 		hostView: hostView{
 			ID: uuidString(host.ID), Name: host.Name, Hostname: host.Hostname,
 			Accounts: host.Accounts, Status: host.Status,
-			AgentVersion: host.AgentVersion, DesiredVersion: host.DesiredVersion,
-			EnrolledAt: host.EnrolledAt.Time, LastSeenAt: nullTime(host.LastSeenAt),
+			ConnectionStatus: s.hostConnectionStatus(host.ID, host.LastSeenAt),
+			AgentVersion:     host.AgentVersion, DesiredVersion: host.DesiredVersion,
+			EnrolledAt:  host.EnrolledAt.Time,
+			LastSeenAt:  nullTime(host.LastSeenAt),
+			Permissions: s.hostPermissions(r.Context(), auth, host.ID),
 		},
 		Connected:  s.hub.online(uuidString(host.ID)),
 		Encryption: host.EncryptionKey != "",
@@ -102,9 +105,14 @@ func (s *Server) handleHostAudit(w http.ResponseWriter, r *http.Request) {
 // machine_id is freed, so the same box may enroll again as a fresh host.
 // Idempotent; the row is kept for audit.
 func (s *Server) handleRevokeHost(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
 	hostID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid host id", http.StatusBadRequest)
+		return
+	}
+	if !s.canHost(r.Context(), auth, "host.revoke", hostID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	if err := s.revokeHost(r.Context(), hostID); errors.Is(err, pgx.ErrNoRows) {

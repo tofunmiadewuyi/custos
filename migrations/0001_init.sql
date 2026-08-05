@@ -152,7 +152,7 @@ create table resource_groups (
 -- Group membership. Polymorphic: a secret or host can be bucketed into groups.
 create table group_resources (
   group_id      uuid not null references resource_groups(id) on delete cascade,
-  resource_kind text not null check (resource_kind in ('secret', 'host')),
+  resource_kind text not null check (resource_kind in ('secret', 'host', 'set')),
   resource_id   uuid not null,
   added_at      timestamptz not null default now(),
   primary key (group_id, resource_kind, resource_id)
@@ -311,6 +311,9 @@ insert into permissions (key, description) values
   ('secret.update', 'Modify secrets'),                             -- scoped
   ('secret.delete', 'Delete secrets'),                             -- scoped
   ('host.access',   'SSH access to a host'),                       -- scoped
+  ('host.revoke',   'Revoke/decommission a host'),                 -- scoped
+  ('host.upgrade',  'Upgrade a host agent'),                       -- scoped
+  ('host.audit',    'View host access audit'),                     -- scoped
   ('group.read',    'View a group and its members'),              -- scoped
   ('group.manage',  'Rename, delete, or change membership of a group'), -- scoped
   ('set.read',      'View a set and its keys'),                    -- scoped

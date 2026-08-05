@@ -187,6 +187,133 @@ func TestSetLifecycle(t *testing.T) {
 	}
 }
 
+func TestMeIncludesGlobalPermissions(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	memberID, member := seedUser(t, s.pool, "global-member@test", "member")
+
+	t.Run("member sees active global grants", func(t *testing.T) {
+		grantVia(t, h, admin, memberID, "group.create", "global", "")
+		grantVia(t, h, admin, memberID, "set.add", "global", "")
+
+		rec := do(t, h, member, "GET", "/me", "")
+		requireCode(t, rec, http.StatusOK)
+		var me struct {
+			ID                string   `json:"id"`
+			Email             string   `json:"email"`
+			GlobalPermissions []string `json:"global_permissions"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+			t.Fatal(err)
+		}
+		if me.ID != memberID || me.Email != "global-member@test" {
+			t.Fatalf("unexpected me response: %s", rec.Body.String())
+		}
+		got := map[string]bool{}
+		for _, permission := range me.GlobalPermissions {
+			got[permission] = true
+		}
+		for _, permission := range []string{"group.create", "set.add"} {
+			if !got[permission] {
+				t.Fatalf("missing global permission %q in %s", permission, rec.Body.String())
+			}
+		}
+		if got["secret.add"] {
+			t.Fatalf("unexpected ungranted permission in %s", rec.Body.String())
+		}
+	})
+
+	t.Run("admin sees effective global permissions", func(t *testing.T) {
+		rec := do(t, h, admin, "GET", "/me", "")
+		requireCode(t, rec, http.StatusOK)
+		var me struct {
+			GlobalPermissions []string `json:"global_permissions"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]bool{}
+		for _, permission := range me.GlobalPermissions {
+			got[permission] = true
+		}
+		for _, permission := range []string{"group.create", "secret.add", "set.add"} {
+			if !got[permission] {
+				t.Fatalf("missing admin global permission %q in %s", permission, rec.Body.String())
+			}
+		}
+	})
+}
+
+func TestResourceResponsesIncludePermissions(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	memberID, member := seedUser(t, s.pool, "resource-perms@test", "member")
+
+	groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"perms-group"}`))
+	secretID := idOf(t, do(t, h, admin, "POST", "/secrets", `{"label":"perms-secret","password":"hidden"}`))
+	setID := idOf(t, do(t, h, admin, "POST", "/sets", `{"name":"perms-set","entries":[{"key":"K","value":"v"}]}`))
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+
+	grantVia(t, h, admin, memberID, "group.read", "group", groupID)
+	grantVia(t, h, admin, memberID, "group.manage", "group", groupID)
+	grantVia(t, h, admin, memberID, "secret.read", "secret", secretID)
+	grantVia(t, h, admin, memberID, "set.read", "set", setID)
+	grantVia(t, h, admin, memberID, "host.access", "host", hostID)
+	grantVia(t, h, admin, memberID, "host.audit", "host", hostID)
+	grantVia(t, h, admin, memberID, "host.revoke", "host", hostID)
+	grantVia(t, h, admin, memberID, "host.upgrade", "host", hostID)
+
+	assertPermissions := func(token, path string, want []string) {
+		t.Helper()
+		rec := do(t, h, token, "GET", path, "")
+		requireCode(t, rec, http.StatusOK)
+		var response struct {
+			Permissions []string `json:"permissions"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if !sameStrings(response.Permissions, want) {
+			t.Fatalf("%s permissions = %v, want %v: %s", path, response.Permissions, want, rec.Body.String())
+		}
+	}
+
+	assertPermissions(member, "/groups/"+groupID, []string{"group.read", "group.manage"})
+	assertPermissions(member, "/secrets/"+secretID, []string{"secret.read"})
+	assertPermissions(member, "/sets/"+setID, []string{"set.read"})
+	assertPermissions(member, "/hosts/"+hostID, []string{"host.access", "host.audit", "host.revoke", "host.upgrade"})
+
+	assertPermissions(admin, "/groups/"+groupID, []string{"group.read", "group.manage"})
+	assertPermissions(admin, "/secrets/"+secretID, []string{"secret.read", "secret.update", "secret.delete"})
+	assertPermissions(admin, "/sets/"+setID, []string{"set.read", "set.manage"})
+	assertPermissions(admin, "/hosts/"+hostID, []string{"host.access", "host.audit", "host.revoke", "host.upgrade"})
+}
+
+func TestHostOperationPermissions(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+
+	auditHostID := seedHost(t, s.pool, []string{"deploy"})
+	revokeHostID := seedHost(t, s.pool, []string{"deploy"})
+	upgradeHostID := seedHost(t, s.pool, []string{"deploy"})
+	memberID, member := seedUser(t, s.pool, "host-ops@test", "member")
+
+	requireCode(t, do(t, h, member, "GET", "/hosts/"+auditHostID+"/access-audit", ""), http.StatusForbidden)
+	grantVia(t, h, admin, memberID, "host.audit", "host", auditHostID)
+	requireCode(t, do(t, h, member, "GET", "/hosts/"+auditHostID+"/access-audit", ""), http.StatusOK)
+
+	requireCode(t, do(t, h, member, "POST", "/hosts/"+revokeHostID+"/revoke", ""), http.StatusForbidden)
+	grantVia(t, h, admin, memberID, "host.revoke", "host", revokeHostID)
+	requireCode(t, do(t, h, member, "POST", "/hosts/"+revokeHostID+"/revoke", ""), http.StatusNoContent)
+	if host := getHost(t, s, revokeHostID); host.Status != "revoked" {
+		t.Fatalf("expected host to be revoked, got %q", host.Status)
+	}
+
+	requireCode(t, do(t, h, member, "POST", "/hosts/"+upgradeHostID+"/upgrade", `{"version":"bad"}`), http.StatusForbidden)
+	grantVia(t, h, admin, memberID, "host.upgrade", "host", upgradeHostID)
+	requireCode(t, do(t, h, member, "POST", "/hosts/"+upgradeHostID+"/upgrade", `{"version":"bad"}`), http.StatusBadRequest)
+}
+
 func do(t *testing.T, h http.Handler, token, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	var r io.Reader
@@ -198,6 +325,18 @@ func do(t *testing.T, h http.Handler, token, method, path, body string) *httptes
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+func sameStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func requireCode(t *testing.T, rec *httptest.ResponseRecorder, want int) {
@@ -322,6 +461,33 @@ func TestAuthzMatrix(t *testing.T) {
 		requireCode(t, do(t, h, member, "GET", "/secrets/"+s2, ""), http.StatusOK)
 	})
 
+	t.Run("set group grant cascades to members", func(t *testing.T) {
+		groupSetID := idOf(t, do(t, h, admin, "POST", "/sets", `{"name":"ops","entries":[{"key":"TOKEN","value":"v"}]}`))
+		requireCode(t, do(t, h, member, "GET", "/sets/"+groupSetID, ""), http.StatusForbidden)
+
+		groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"sets"}`))
+		requireCode(t, do(t, h, admin, "POST", "/groups/"+groupID+"/resources",
+			fmt.Sprintf(`{"resource_kind":"set","resource_id":%q}`, groupSetID)), http.StatusNoContent)
+		grantVia(t, h, admin, memberID, "set.read", "group", groupID)
+
+		requireCode(t, do(t, h, member, "GET", "/sets/"+groupSetID, ""), http.StatusOK)
+		rec := do(t, h, member, "GET", "/sets", "")
+		requireCode(t, rec, http.StatusOK)
+		var sets []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &sets); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, set := range sets {
+			found = found || set.ID == groupSetID
+		}
+		if !found {
+			t.Fatalf("expected group-readable set in list response: %s", rec.Body.String())
+		}
+	})
+
 	t.Run("members can create enrollment tokens", func(t *testing.T) {
 		rec := do(t, h, member, "POST", "/enroll-tokens", `{"label":"member-host","accounts":["deploy"],"ttl_hours":1}`)
 		requireCode(t, rec, http.StatusOK)
@@ -382,6 +548,251 @@ func TestAuthzMatrix(t *testing.T) {
 			t.Fatalf("expected admin to see all active hosts, got %s", rec.Body.String())
 		}
 	})
+
+	t.Run("host list includes group-granted hosts", func(t *testing.T) {
+		hostID := seedHost(t, s.pool, []string{"deploy"})
+		groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"host-group"}`))
+		requireCode(t, do(t, h, admin, "POST", "/groups/"+groupID+"/resources",
+			fmt.Sprintf(`{"resource_kind":"host","resource_id":%q}`, hostID)), http.StatusNoContent)
+		grantVia(t, h, admin, memberID, "host.access", "group", groupID)
+
+		rec := do(t, h, member, "GET", "/hosts", "")
+		requireCode(t, rec, http.StatusOK)
+		var memberHosts []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &memberHosts); err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, host := range memberHosts {
+			found = found || host.ID == hostID
+		}
+		if !found {
+			t.Fatalf("expected group-granted host in list, got %s", rec.Body.String())
+		}
+	})
+}
+
+func TestGroupUpdate(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+
+	groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"ops","description":"old"}`))
+	path := "/groups/" + groupID
+
+	t.Run("admin can update group metadata", func(t *testing.T) {
+		rec := do(t, h, admin, "PUT", path, `{"name":"platform","description":"new"}`)
+		requireCode(t, rec, http.StatusOK)
+		var updated struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+			t.Fatal(err)
+		}
+		if updated.ID != groupID || updated.Name != "platform" || updated.Description != "new" {
+			t.Fatalf("unexpected update response: %s", rec.Body.String())
+		}
+	})
+
+	readerID, reader := seedUser(t, s.pool, "group-reader@test", "member")
+	grantVia(t, h, admin, readerID, "group.read", "group", groupID)
+	t.Run("group read alone cannot update", func(t *testing.T) {
+		requireCode(t, do(t, h, reader, "PUT", path, `{"name":"reader","description":"denied"}`), http.StatusForbidden)
+	})
+
+	managerID, manager := seedUser(t, s.pool, "group-manager@test", "member")
+	grantVia(t, h, admin, managerID, "group.manage", "group", groupID)
+	t.Run("group manager can update", func(t *testing.T) {
+		rec := do(t, h, manager, "PUT", path, `{"name":"managed","description":"by member"}`)
+		requireCode(t, rec, http.StatusOK)
+		var updated struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &updated); err != nil {
+			t.Fatal(err)
+		}
+		if updated.Name != "managed" || updated.Description != "by member" {
+			t.Fatalf("unexpected manager update response: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("empty name is rejected", func(t *testing.T) {
+		requireCode(t, do(t, h, admin, "PUT", path, `{"name":"","description":"x"}`), http.StatusBadRequest)
+	})
+
+	t.Run("missing group returns not found", func(t *testing.T) {
+		missing := "00000000-0000-0000-0000-000000000000"
+		requireCode(t, do(t, h, admin, "PUT", "/groups/"+missing, `{"name":"missing"}`), http.StatusNotFound)
+	})
+}
+
+func TestGroupDetailEnrichesResources(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+	secretID := idOf(t, do(t, h, admin, "POST", "/secrets", `{"label":"db","url":"https://db.example","username":"root","password":"hidden"}`))
+	setID := idOf(t, do(t, h, admin, "POST", "/sets", `{"name":"ops-env","entries":[{"key":"TOKEN","value":"v"}]}`))
+	groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"ops"}`))
+
+	for _, resource := range []struct {
+		kind string
+		id   string
+	}{
+		{"host", hostID},
+		{"secret", secretID},
+		{"set", setID},
+	} {
+		body := fmt.Sprintf(`{"resource_kind":%q,"resource_id":%q}`, resource.kind, resource.id)
+		requireCode(t, do(t, h, admin, "POST", "/groups/"+groupID+"/resources", body), http.StatusNoContent)
+	}
+
+	rec := do(t, h, admin, "GET", "/groups/"+groupID, "")
+	requireCode(t, rec, http.StatusOK)
+	var detail struct {
+		Resources []struct {
+			ResourceKind string          `json:"resource_kind"`
+			ResourceID   string          `json:"resource_id"`
+			DisplayName  string          `json:"display_name"`
+			Host         json.RawMessage `json:"host"`
+			Secret       json.RawMessage `json:"secret"`
+			Set          json.RawMessage `json:"set"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, resource := range detail.Resources {
+		switch resource.ResourceKind {
+		case "host":
+			var host struct {
+				ID       string   `json:"id"`
+				Name     string   `json:"name"`
+				Hostname string   `json:"hostname"`
+				Accounts []string `json:"accounts"`
+			}
+			if err := json.Unmarshal(resource.Host, &host); err != nil {
+				t.Fatal(err)
+			}
+			if host.ID != hostID || host.Name != "h" || host.Hostname != "h" || len(host.Accounts) != 1 || host.Accounts[0] != "deploy" {
+				t.Fatalf("unexpected host enrichment: %s", rec.Body.String())
+			}
+			seen["host"] = true
+		case "secret":
+			var secret struct {
+				ID       string `json:"id"`
+				Label    string `json:"label"`
+				URL      string `json:"url"`
+				Username string `json:"username"`
+				Password string `json:"password"`
+			}
+			if err := json.Unmarshal(resource.Secret, &secret); err != nil {
+				t.Fatal(err)
+			}
+			if secret.ID != secretID || secret.Label != "db" || secret.URL != "https://db.example" || secret.Username != "root" || secret.Password != "" {
+				t.Fatalf("unexpected secret enrichment: %s", rec.Body.String())
+			}
+			seen["secret"] = true
+		case "set":
+			var set struct {
+				ID       string `json:"id"`
+				Name     string `json:"name"`
+				KeyCount int64  `json:"key_count"`
+			}
+			if err := json.Unmarshal(resource.Set, &set); err != nil {
+				t.Fatal(err)
+			}
+			if set.ID != setID || set.Name != "ops-env" || set.KeyCount != 1 {
+				t.Fatalf("unexpected set enrichment: %s", rec.Body.String())
+			}
+			seen["set"] = true
+		}
+		if resource.DisplayName == "" {
+			t.Fatalf("expected display_name for %s resource: %s", resource.ResourceKind, rec.Body.String())
+		}
+	}
+	for _, kind := range []string{"host", "secret", "set"} {
+		if !seen[kind] {
+			t.Fatalf("missing %s enrichment: %s", kind, rec.Body.String())
+		}
+	}
+}
+
+func TestGroupMembers(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+
+	groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"ops"}`))
+	memberID, member := seedUser(t, s.pool, "group-member@test", "member")
+	grantVia(t, h, admin, memberID, "group.read", "group", groupID)
+	grantVia(t, h, admin, memberID, "group.manage", "group", groupID)
+	grantVia(t, h, admin, memberID, "host.access", "group", groupID)
+
+	rec := do(t, h, member, "GET", "/groups/"+groupID+"/members", "")
+	requireCode(t, rec, http.StatusOK)
+	var members []struct {
+		UserID      string   `json:"user_id"`
+		Email       string   `json:"email"`
+		Name        string   `json:"name"`
+		Role        string   `json:"role"`
+		Status      string   `json:"status"`
+		Permissions []string `json:"permissions"`
+		Grants      []struct {
+			ID         string `json:"id"`
+			Permission string `json:"permission"`
+		} `json:"grants"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &members); err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("expected admin owner plus member, got %s", rec.Body.String())
+	}
+	var found *struct {
+		UserID      string   `json:"user_id"`
+		Email       string   `json:"email"`
+		Name        string   `json:"name"`
+		Role        string   `json:"role"`
+		Status      string   `json:"status"`
+		Permissions []string `json:"permissions"`
+		Grants      []struct {
+			ID         string `json:"id"`
+			Permission string `json:"permission"`
+		} `json:"grants"`
+	}
+	for i := range members {
+		if members[i].UserID == memberID {
+			found = &members[i]
+			break
+		}
+	}
+	if found == nil || found.Email != "group-member@test" || found.Role != "member" || found.Status != "active" {
+		t.Fatalf("expected enriched member row, got %s", rec.Body.String())
+	}
+	wantPerms := map[string]bool{"group.read": false, "group.manage": false, "host.access": false}
+	for _, permission := range found.Permissions {
+		if _, ok := wantPerms[permission]; ok {
+			wantPerms[permission] = true
+		}
+	}
+	for permission, ok := range wantPerms {
+		if !ok {
+			t.Fatalf("missing permission %q in %s", permission, rec.Body.String())
+		}
+	}
+	if len(found.Grants) != 3 {
+		t.Fatalf("expected one grant per permission for member, got %s", rec.Body.String())
+	}
+
+	outsiderID, outsider := seedUser(t, s.pool, "group-outsider@test", "member")
+	_ = outsiderID
+	requireCode(t, do(t, h, outsider, "GET", "/groups/"+groupID+"/members", ""), http.StatusForbidden)
+	requireCode(t, do(t, h, admin, "GET", "/groups/00000000-0000-0000-0000-000000000000/members", ""), http.StatusNotFound)
 }
 
 // TestSuspendCutsSSH guards the one invariant that severs a suspended user from

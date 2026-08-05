@@ -33,19 +33,21 @@ type updateSetRequest struct {
 }
 
 type setView struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Keys      []string  `json:"keys"` // env var names; values are never returned here
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Keys        []string  `json:"keys"` // env var names; values are never returned here
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Permissions []string  `json:"permissions"`
 }
 
 type setListView struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	KeyCount  int64     `json:"key_count"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	KeyCount    int64     `json:"key_count"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Permissions []string  `json:"permissions"`
 }
 
 type setHostView struct {
@@ -114,6 +116,7 @@ func (s *Server) handleCreateSet(w http.ResponseWriter, r *http.Request) {
 	s.writeResponse(w, auth.ClientPublicKey, setView{
 		ID: uuidString(set.ID), Name: set.Name, Keys: entryKeys(req.Entries),
 		CreatedAt: set.CreatedAt.Time, UpdatedAt: set.UpdatedAt.Time,
+		Permissions: s.setPermissions(r.Context(), auth, set.ID),
 	})
 }
 
@@ -130,6 +133,7 @@ func (s *Server) handleListSets(w http.ResponseWriter, r *http.Request) {
 			views = append(views, setListView{
 				ID: uuidString(row.ID), Name: row.Name, KeyCount: row.KeyCount,
 				CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+				Permissions: s.setPermissions(r.Context(), auth, row.ID),
 			})
 		}
 	} else {
@@ -142,6 +146,7 @@ func (s *Server) handleListSets(w http.ResponseWriter, r *http.Request) {
 			views = append(views, setListView{
 				ID: uuidString(row.ID), Name: row.Name, KeyCount: row.KeyCount,
 				CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
+				Permissions: s.setPermissions(r.Context(), auth, row.ID),
 			})
 		}
 	}
@@ -176,6 +181,7 @@ func (s *Server) handleGetSet(w http.ResponseWriter, r *http.Request) {
 	s.writeResponse(w, authFrom(r.Context()).ClientPublicKey, setView{
 		ID: uuidString(set.ID), Name: set.Name, Keys: keys,
 		CreatedAt: set.CreatedAt.Time, UpdatedAt: set.UpdatedAt.Time,
+		Permissions: s.setPermissions(r.Context(), auth, set.ID),
 	})
 }
 
@@ -206,15 +212,17 @@ func (s *Server) handleListSetHosts(w http.ResponseWriter, r *http.Request) {
 	for _, h := range rows {
 		views = append(views, setHostView{
 			hostView: hostView{
-				ID:             uuidString(h.ID),
-				Name:           h.Name,
-				Hostname:       h.Hostname,
-				Accounts:       h.Accounts,
-				Status:         h.Status,
-				AgentVersion:   h.AgentVersion,
-				DesiredVersion: h.DesiredVersion,
-				EnrolledAt:     h.EnrolledAt.Time,
-				LastSeenAt:     nullTime(h.LastSeenAt),
+				ID:               uuidString(h.ID),
+				Name:             h.Name,
+				Hostname:         h.Hostname,
+				Accounts:         h.Accounts,
+				Status:           h.Status,
+				ConnectionStatus: s.hostConnectionStatus(h.ID, h.LastSeenAt),
+				AgentVersion:     h.AgentVersion,
+				DesiredVersion:   h.DesiredVersion,
+				EnrolledAt:       h.EnrolledAt.Time,
+				LastSeenAt:       nullTime(h.LastSeenAt),
+				Permissions:      s.hostPermissions(r.Context(), auth, h.ID),
 			},
 			AsUser:  h.AsUser.String,
 			BoundAt: h.BoundAt.Time,
@@ -286,6 +294,7 @@ func (s *Server) handleUpdateSet(w http.ResponseWriter, r *http.Request) {
 	s.writeResponse(w, auth.ClientPublicKey, setView{
 		ID: uuidString(updated.ID), Name: updated.Name, Keys: keys,
 		CreatedAt: updated.CreatedAt.Time, UpdatedAt: updated.UpdatedAt.Time,
+		Permissions: s.setPermissions(r.Context(), auth, updated.ID),
 	})
 }
 

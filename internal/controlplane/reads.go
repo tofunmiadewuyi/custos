@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -10,11 +11,12 @@ import (
 )
 
 type meView struct {
-	ID          string `json:"id"`
-	Email       string `json:"email"`
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Role        string `json:"role"`
+	ID                string   `json:"id"`
+	Email             string   `json:"email"`
+	Name              string   `json:"name"`
+	DisplayName       string   `json:"display_name"`
+	Role              string   `json:"role"`
+	GlobalPermissions []string `json:"global_permissions"`
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
@@ -24,13 +26,43 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not load profile", err)
 		return
 	}
+	permissions, err := s.globalPermissionsFor(r.Context(), auth)
+	if err != nil {
+		serverError(w, "could not load permissions", err)
+		return
+	}
 	s.writeResponse(w, auth.ClientPublicKey, meView{
-		ID:          uuidString(user.ID),
-		Email:       user.Email,
-		Name:        user.Name,
-		DisplayName: textString(user.DisplayName),
-		Role:        user.Role,
+		ID:                uuidString(user.ID),
+		Email:             user.Email,
+		Name:              user.Name,
+		DisplayName:       textString(user.DisplayName),
+		Role:              user.Role,
+		GlobalPermissions: permissions,
 	})
+}
+
+func (s *Server) globalPermissionsFor(ctx context.Context, auth authInfo) ([]string, error) {
+	if auth.Role == "admin" {
+		rows, err := s.q.ListGlobalPermissions(ctx)
+		if err != nil {
+			return nil, err
+		}
+		permissions := make([]string, 0, len(rows))
+		for _, row := range rows {
+			permissions = append(permissions, row.Permission)
+		}
+		return permissions, nil
+	}
+
+	rows, err := s.q.ListUserGlobalPermissions(ctx, auth.UserID)
+	if err != nil {
+		return nil, err
+	}
+	permissions := make([]string, 0, len(rows))
+	for _, row := range rows {
+		permissions = append(permissions, row.Permission)
+	}
+	return permissions, nil
 }
 
 // updateProfileRequest is a partial update: nil fields are left unchanged. An
@@ -71,25 +103,48 @@ func (s *Server) handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not load profile", err)
 		return
 	}
+	permissions, err := s.globalPermissionsFor(r.Context(), auth)
+	if err != nil {
+		serverError(w, "could not load permissions", err)
+		return
+	}
 	s.writeResponse(w, auth.ClientPublicKey, meView{
-		ID:          uuidString(user.ID),
-		Email:       user.Email,
-		Name:        user.Name,
-		DisplayName: textString(user.DisplayName),
-		Role:        user.Role,
+		ID:                uuidString(user.ID),
+		Email:             user.Email,
+		Name:              user.Name,
+		DisplayName:       textString(user.DisplayName),
+		Role:              user.Role,
+		GlobalPermissions: permissions,
 	})
 }
 
 type hostView struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Hostname       string     `json:"hostname"`
-	Accounts       []string   `json:"accounts"`
-	Status         string     `json:"status"`
-	AgentVersion   string     `json:"agent_version"`
-	DesiredVersion string     `json:"desired_version"`
-	EnrolledAt     time.Time  `json:"enrolled_at"`
-	LastSeenAt     *time.Time `json:"last_seen_at"`
+	ID               string     `json:"id"`
+	Name             string     `json:"name"`
+	Hostname         string     `json:"hostname"`
+	Accounts         []string   `json:"accounts"`
+	Status           string     `json:"status"`
+	ConnectionStatus string     `json:"connection_status"`
+	AgentVersion     string     `json:"agent_version"`
+	DesiredVersion   string     `json:"desired_version"`
+	EnrolledAt       time.Time  `json:"enrolled_at"`
+	LastSeenAt       *time.Time `json:"last_seen_at"`
+	Permissions      []string   `json:"permissions"`
+}
+
+const hostStaleWindow = 5 * time.Minute
+
+func (s *Server) hostConnectionStatus(id pgtype.UUID, lastSeen pgtype.Timestamptz) string {
+	if s.hub.online(uuidString(id)) {
+		return "online"
+	}
+	if !lastSeen.Valid {
+		return "offline"
+	}
+	if time.Since(lastSeen.Time) <= hostStaleWindow {
+		return "stale"
+	}
+	return "offline"
 }
 
 func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
@@ -105,8 +160,10 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 			views = append(views, hostView{
 				ID: uuidString(h.ID), Name: h.Name, Hostname: h.Hostname,
 				Accounts: h.Accounts, Status: h.Status,
-				AgentVersion: h.AgentVersion, DesiredVersion: h.DesiredVersion,
+				ConnectionStatus: s.hostConnectionStatus(h.ID, h.LastSeenAt),
+				AgentVersion:     h.AgentVersion, DesiredVersion: h.DesiredVersion,
 				EnrolledAt: h.EnrolledAt.Time, LastSeenAt: nullTime(h.LastSeenAt),
+				Permissions: s.hostPermissions(r.Context(), auth, h.ID),
 			})
 		}
 	} else {
@@ -119,8 +176,10 @@ func (s *Server) handleListHosts(w http.ResponseWriter, r *http.Request) {
 			views = append(views, hostView{
 				ID: uuidString(h.ID), Name: h.Name, Hostname: h.Hostname,
 				Accounts: h.Accounts, Status: h.Status,
-				AgentVersion: h.AgentVersion, DesiredVersion: h.DesiredVersion,
+				ConnectionStatus: s.hostConnectionStatus(h.ID, h.LastSeenAt),
+				AgentVersion:     h.AgentVersion, DesiredVersion: h.DesiredVersion,
 				EnrolledAt: h.EnrolledAt.Time, LastSeenAt: nullTime(h.LastSeenAt),
+				Permissions: s.hostPermissions(r.Context(), auth, h.ID),
 			})
 		}
 	}

@@ -99,9 +99,14 @@ type upgradeOutcome struct {
 }
 
 func (s *Server) handleUpgradeHost(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
 	hostID, err := parseUUID(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "invalid host id", http.StatusBadRequest)
+		return
+	}
+	if !s.canHost(r.Context(), auth, "host.upgrade", hostID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	var req upgradeRequest

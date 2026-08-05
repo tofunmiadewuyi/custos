@@ -5,6 +5,21 @@ select exists (
     and target_kind = 'global' and revoked_at is null
 );
 
+-- name: ListUserGlobalPermissions :many
+select g.id as grant_id, p.key as permission, p.description, g.created_at as granted_at
+from grants g
+join permissions p on p.key = g.permission
+where g.user_id = @user_id
+  and g.target_kind = 'global'
+  and g.revoked_at is null
+order by p.key;
+
+-- name: ListGlobalPermissions :many
+select key as permission, description
+from permissions
+where key in ('secret.add', 'group.create', 'set.add')
+order by key;
+
 -- name: UserHasSecretPermission :one
 select exists (
   select 1 from grants g
@@ -60,9 +75,14 @@ select exists (
 
 -- name: UserHasSetPermission :one
 select exists (
-  select 1 from grants
-  where user_id = @user_id and permission = @permission and revoked_at is null
-    and target_kind = 'set' and target_id = @set_id
+  select 1 from grants g
+  where g.user_id = @user_id and g.permission = @permission and g.revoked_at is null
+    and (
+      (g.target_kind = 'set' and g.target_id = @set_id)
+      or (g.target_kind = 'group' and g.target_id in (
+        select group_id from group_resources
+        where resource_kind = 'set' and resource_id = @set_id))
+    )
 );
 
 -- name: ListHostDirectAccess :many

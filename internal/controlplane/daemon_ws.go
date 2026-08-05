@@ -37,6 +37,7 @@ func (s *Server) handleDaemon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	hostID := uuidString(host.ID)
+	s.q.TouchHostSeen(ctx, host.ID)
 
 	if version != "" && version != host.AgentVersion {
 		s.q.SetHostVersion(ctx, db.SetHostVersionParams{ID: host.ID, AgentVersion: version})

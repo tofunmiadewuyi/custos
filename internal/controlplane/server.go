@@ -109,7 +109,9 @@ func (s *Server) userRoutes(r chi.Router) {
 	r.Route("/groups", func(r chi.Router) {
 		r.Post("/", s.handleCreateGroup)
 		r.Get("/", s.handleListGroups)
+		r.Get("/{id}/members", s.handleListGroupMembers)
 		r.Get("/{id}", s.handleGetGroup)
+		r.Put("/{id}", s.handleUpdateGroup)
 		r.Delete("/{id}", s.handleDeleteGroup)
 		r.Post("/{id}/resources", s.handleAddGroupResource)
 		r.Delete("/{id}/resources", s.handleRemoveGroupResource)
@@ -127,10 +129,13 @@ func (s *Server) userRoutes(r chi.Router) {
 		r.Delete("/{id}/entries/{key}", s.handleDeleteSetEntry)
 	})
 
-	// Host list/detail/audit and set binding are self-gated on host.access; host lifecycle stays admin.
+	// Host list/detail/audit, lifecycle actions, and set binding are self-gated by grants.
 	r.Get("/hosts", s.handleListHosts)
 	r.Get("/hosts/{id}", s.handleGetHost)
 	r.Get("/hosts/{id}/audit", s.handleHostAudit)
+	r.Get("/hosts/{id}/access-audit", s.handleHostAccessAudit)
+	r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
+	r.Post("/hosts/{id}/upgrade", s.handleUpgradeHost)
 	r.Post("/hosts/{id}/sets", s.handleBindSet)
 	r.Delete("/hosts/{id}/sets/{setId}", s.handleUnbindSet)
 }
@@ -142,11 +147,8 @@ func (s *Server) adminRoutes(r chi.Router) {
 	r.Get("/audit", s.handleAllAudit)
 	r.Get("/grant-audit", s.handleGrantAudit)
 	r.Get("/secrets/{id}/access-audit", s.handleSecretAccessAudit)
-	r.Get("/hosts/{id}/access-audit", s.handleHostAccessAudit)
 
 	// /hosts and /invitations stay flat: each spans tiers (/hosts/{id}/sets is user, /invitations/accept is public).
-	r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
-	r.Post("/hosts/{id}/upgrade", s.handleUpgradeHost)
 
 	r.Post("/invitations", s.handleCreateInvitation)
 	r.Get("/invitations", s.handleListInvitations)

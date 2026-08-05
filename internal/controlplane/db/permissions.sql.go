@@ -51,6 +51,38 @@ func (q *Queries) ListActiveAdmins(ctx context.Context) ([]ListActiveAdminsRow, 
 	return items, nil
 }
 
+const listGlobalPermissions = `-- name: ListGlobalPermissions :many
+select key as permission, description
+from permissions
+where key in ('secret.add', 'group.create', 'set.add')
+order by key
+`
+
+type ListGlobalPermissionsRow struct {
+	Permission  string
+	Description string
+}
+
+func (q *Queries) ListGlobalPermissions(ctx context.Context) ([]ListGlobalPermissionsRow, error) {
+	rows, err := q.db.Query(ctx, listGlobalPermissions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGlobalPermissionsRow{}
+	for rows.Next() {
+		var i ListGlobalPermissionsRow
+		if err := rows.Scan(&i.Permission, &i.Description); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHostDirectAccess = `-- name: ListHostDirectAccess :many
 select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 from grants g
@@ -269,6 +301,48 @@ func (q *Queries) ListSecretGroupAccess(ctx context.Context, secretID pgtype.UUI
 	return items, nil
 }
 
+const listUserGlobalPermissions = `-- name: ListUserGlobalPermissions :many
+select g.id as grant_id, p.key as permission, p.description, g.created_at as granted_at
+from grants g
+join permissions p on p.key = g.permission
+where g.user_id = $1
+  and g.target_kind = 'global'
+  and g.revoked_at is null
+order by p.key
+`
+
+type ListUserGlobalPermissionsRow struct {
+	GrantID     pgtype.UUID
+	Permission  string
+	Description string
+	GrantedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) ListUserGlobalPermissions(ctx context.Context, userID pgtype.UUID) ([]ListUserGlobalPermissionsRow, error) {
+	rows, err := q.db.Query(ctx, listUserGlobalPermissions, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserGlobalPermissionsRow{}
+	for rows.Next() {
+		var i ListUserGlobalPermissionsRow
+		if err := rows.Scan(
+			&i.GrantID,
+			&i.Permission,
+			&i.Description,
+			&i.GrantedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const userHasGlobalPermission = `-- name: UserHasGlobalPermission :one
 select exists (
   select 1 from grants
@@ -364,9 +438,14 @@ func (q *Queries) UserHasSecretPermission(ctx context.Context, arg UserHasSecret
 
 const userHasSetPermission = `-- name: UserHasSetPermission :one
 select exists (
-  select 1 from grants
-  where user_id = $1 and permission = $2 and revoked_at is null
-    and target_kind = 'set' and target_id = $3
+  select 1 from grants g
+  where g.user_id = $1 and g.permission = $2 and g.revoked_at is null
+    and (
+      (g.target_kind = 'set' and g.target_id = $3)
+      or (g.target_kind = 'group' and g.target_id in (
+        select group_id from group_resources
+        where resource_kind = 'set' and resource_id = $3))
+    )
 )
 `
 
