@@ -12,17 +12,19 @@ import (
 // accessEntry is one path by which a user reaches a secret. A user may appear
 // more than once (e.g. a direct grant plus membership in two groups).
 type accessEntry struct {
-	UserID      string     `json:"user_id"`
-	Email       string     `json:"email"`
-	Name        string     `json:"name"`
-	DisplayName string     `json:"display_name"`
-	Role        string     `json:"role"`
-	Status      string     `json:"status"`
-	Via         string     `json:"via"`                  // "direct" | "group" | "admin"
-	Permission  string     `json:"permission"`           // "*" for admins (unconditional)
-	GroupID     string     `json:"group_id,omitempty"`   // set when via == "group"
-	GroupName   string     `json:"group_name,omitempty"` // set when via == "group"
-	GrantedAt   *time.Time `json:"granted_at,omitempty"` // nil for admins
+	UserID       string     `json:"user_id"`
+	Email        string     `json:"email"`
+	Name         string     `json:"name"`
+	DisplayName  string     `json:"display_name"`
+	Role         string     `json:"role"`
+	Status       string     `json:"status"`
+	Via          string     `json:"via"`                    // "direct" | "group" | "admin"
+	GrantID      string     `json:"grant_id,omitempty"`     // empty for admins (no grant row)
+	Permission   string     `json:"permission"`             // "*" for admins (unconditional)
+	Fingerprints []string   `json:"fingerprints,omitempty"` // SSH key fingerprints for host access
+	GroupID      string     `json:"group_id,omitempty"`     // set when via == "group"
+	GroupName    string     `json:"group_name,omitempty"`   // set when via == "group"
+	GrantedAt    *time.Time `json:"granted_at,omitempty"`   // nil for admins
 }
 
 type accessAuditView struct {
@@ -75,6 +77,7 @@ func (s *Server) handleSecretAccessAudit(w http.ResponseWriter, r *http.Request)
 			UserID: uuidString(d.UserID), Email: d.Email, Name: d.Name,
 			DisplayName: textString(d.DisplayName),
 			Role:        d.Role, Status: d.Status, Via: "direct",
+			GrantID:    uuidString(d.GrantID),
 			Permission: d.Permission, GrantedAt: &at,
 		})
 	}
@@ -84,6 +87,7 @@ func (s *Server) handleSecretAccessAudit(w http.ResponseWriter, r *http.Request)
 			UserID: uuidString(g.UserID), Email: g.Email, Name: g.Name,
 			DisplayName: textString(g.DisplayName),
 			Role:        g.Role, Status: g.Status, Via: "group",
+			GrantID:    uuidString(g.GrantID),
 			Permission: g.Permission, GroupID: uuidString(g.GroupID),
 			GroupName: g.GroupName, GrantedAt: &at,
 		})
@@ -109,8 +113,8 @@ type hostAccessAuditView struct {
 	Entries  []accessEntry `json:"entries"`
 }
 
-// handleHostAccessAudit reports who can SSH to a host: directly, via a group the
-// host belongs to, or unconditionally as an active admin.
+// handleHostAccessAudit reports who can SSH to a host: directly or via a group
+// the host belongs to. Admin API bypass does not apply to daemon SSH snapshots.
 func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 	auth := authFrom(r.Context())
 	hostID, err := parseUUID(chi.URLParam(r, "id"))
@@ -143,20 +147,15 @@ func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not load access", err)
 		return
 	}
-	admins, err := s.q.ListActiveAdmins(r.Context())
-	if err != nil {
-		serverError(w, "could not load access", err)
-		return
-	}
-
-	entries := make([]accessEntry, 0, len(direct)+len(group)+len(admins))
+	entries := make([]accessEntry, 0, len(direct)+len(group))
 	for _, d := range direct {
 		at := d.CreatedAt.Time
 		entries = append(entries, accessEntry{
 			UserID: uuidString(d.UserID), Email: d.Email, Name: d.Name,
 			DisplayName: textString(d.DisplayName),
 			Role:        d.Role, Status: d.Status, Via: "direct",
-			Permission: d.Permission, GrantedAt: &at,
+			GrantID:    uuidString(d.GrantID),
+			Permission: d.Permission, Fingerprints: d.Fingerprints, GrantedAt: &at,
 		})
 	}
 	for _, g := range group {
@@ -165,15 +164,9 @@ func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 			UserID: uuidString(g.UserID), Email: g.Email, Name: g.Name,
 			DisplayName: textString(g.DisplayName),
 			Role:        g.Role, Status: g.Status, Via: "group",
-			Permission: g.Permission, GroupID: uuidString(g.GroupID),
+			GrantID:    uuidString(g.GrantID),
+			Permission: g.Permission, Fingerprints: g.Fingerprints, GroupID: uuidString(g.GroupID),
 			GroupName: g.GroupName, GrantedAt: &at,
-		})
-	}
-	for _, a := range admins {
-		entries = append(entries, accessEntry{
-			UserID: uuidString(a.UserID), Email: a.Email, Name: a.Name,
-			DisplayName: textString(a.DisplayName),
-			Role:        "admin", Status: a.Status, Via: "admin", Permission: "*",
 		})
 	}
 

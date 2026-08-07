@@ -8,12 +8,38 @@ import (
 	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
 )
 
+// Permission catalogue: add a permission here and the can*/view/validation all follow.
 var (
+	allGlobalPermissions = []string{"group.create", "secret.add", "set.add"}
 	allGroupPermissions  = []string{"group.read", "group.manage"}
 	allHostPermissions   = []string{"host.access", "host.audit", "host.revoke", "host.upgrade"}
 	allSecretPermissions = []string{"secret.read", "secret.update", "secret.delete"}
 	allSetPermissions    = []string{"set.read", "set.manage"}
 )
+
+// grantablePermissions maps target_kind to its valid permissions; group carries resource perms too.
+var grantablePermissions = map[string]map[string]bool{
+	"global": permSet(allGlobalPermissions),
+	"group":  permSet(allGroupPermissions, allHostPermissions, allSecretPermissions, allSetPermissions),
+	"host":   permSet(allHostPermissions),
+	"secret": permSet(allSecretPermissions),
+	"set":    permSet(allSetPermissions),
+}
+
+func permSet(lists ...[]string) map[string]bool {
+	set := map[string]bool{}
+	for _, list := range lists {
+		for _, p := range list {
+			set[p] = true
+		}
+	}
+	return set
+}
+
+// validGrant reports whether permission is grantable on the given target_kind.
+func validGrant(targetKind, permission string) bool {
+	return grantablePermissions[targetKind][permission]
+}
 
 // canGlobal reports whether the user may perform a global-scoped action.
 // Admins bypass grants entirely.

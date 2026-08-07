@@ -29,6 +29,10 @@ func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "user_id, permission and target_kind are required", http.StatusBadRequest)
 		return
 	}
+	if !validGrant(req.TargetKind, req.Permission) {
+		http.Error(w, "invalid permission for target_kind", http.StatusBadRequest)
+		return
+	}
 	userID, err := parseUUID(req.UserID)
 	if err != nil {
 		http.Error(w, "invalid user_id", http.StatusBadRequest)

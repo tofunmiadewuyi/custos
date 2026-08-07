@@ -84,24 +84,29 @@ func (q *Queries) ListGlobalPermissions(ctx context.Context) ([]ListGlobalPermis
 }
 
 const listHostDirectAccess = `-- name: ListHostDirectAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
+       g.permission, g.created_at, array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
 from grants g
-join users u on u.id = g.user_id
+join users u on u.id = g.user_id and u.status = 'active'
+join public_keys pk on pk.user_id = g.user_id
 where g.revoked_at is null
   and g.permission = 'host.access'
   and g.target_kind = 'host' and g.target_id = $1
+group by g.id, u.id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 order by u.email
 `
 
 type ListHostDirectAccessRow struct {
-	UserID      pgtype.UUID
-	Email       string
-	Name        string
-	DisplayName pgtype.Text
-	Role        string
-	Status      string
-	Permission  string
-	CreatedAt   pgtype.Timestamptz
+	GrantID      pgtype.UUID
+	UserID       pgtype.UUID
+	Email        string
+	Name         string
+	DisplayName  pgtype.Text
+	Role         string
+	Status       string
+	Permission   string
+	CreatedAt    pgtype.Timestamptz
+	Fingerprints []string
 }
 
 func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) ([]ListHostDirectAccessRow, error) {
@@ -114,6 +119,7 @@ func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) 
 	for rows.Next() {
 		var i ListHostDirectAccessRow
 		if err := rows.Scan(
+			&i.GrantID,
 			&i.UserID,
 			&i.Email,
 			&i.Name,
@@ -122,6 +128,7 @@ func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) 
 			&i.Status,
 			&i.Permission,
 			&i.CreatedAt,
+			&i.Fingerprints,
 		); err != nil {
 			return nil, err
 		}
@@ -134,10 +141,12 @@ func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) 
 }
 
 const listHostGroupAccess = `-- name: ListHostGroupAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
-       rg.id as group_id, rg.name as group_name
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
+       rg.id as group_id, rg.name as group_name,
+       array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
 from grants g
-join users u on u.id = g.user_id
+join users u on u.id = g.user_id and u.status = 'active'
+join public_keys pk on pk.user_id = g.user_id
 join resource_groups rg on rg.id = g.target_id
 where g.revoked_at is null
   and g.permission = 'host.access'
@@ -146,20 +155,23 @@ where g.revoked_at is null
     select group_id from group_resources
     where resource_kind = 'host' and resource_id = $1
   )
+group by g.id, u.id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at, rg.id, rg.name
 order by rg.name, u.email
 `
 
 type ListHostGroupAccessRow struct {
-	UserID      pgtype.UUID
-	Email       string
-	Name        string
-	DisplayName pgtype.Text
-	Role        string
-	Status      string
-	Permission  string
-	CreatedAt   pgtype.Timestamptz
-	GroupID     pgtype.UUID
-	GroupName   string
+	GrantID      pgtype.UUID
+	UserID       pgtype.UUID
+	Email        string
+	Name         string
+	DisplayName  pgtype.Text
+	Role         string
+	Status       string
+	Permission   string
+	CreatedAt    pgtype.Timestamptz
+	GroupID      pgtype.UUID
+	GroupName    string
+	Fingerprints []string
 }
 
 func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) ([]ListHostGroupAccessRow, error) {
@@ -172,6 +184,7 @@ func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) (
 	for rows.Next() {
 		var i ListHostGroupAccessRow
 		if err := rows.Scan(
+			&i.GrantID,
 			&i.UserID,
 			&i.Email,
 			&i.Name,
@@ -182,6 +195,7 @@ func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) (
 			&i.CreatedAt,
 			&i.GroupID,
 			&i.GroupName,
+			&i.Fingerprints,
 		); err != nil {
 			return nil, err
 		}
@@ -194,7 +208,7 @@ func (q *Queries) ListHostGroupAccess(ctx context.Context, hostID pgtype.UUID) (
 }
 
 const listSecretDirectAccess = `-- name: ListSecretDirectAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 from grants g
 join users u on u.id = g.user_id
 where g.revoked_at is null
@@ -203,6 +217,7 @@ order by u.email
 `
 
 type ListSecretDirectAccessRow struct {
+	GrantID     pgtype.UUID
 	UserID      pgtype.UUID
 	Email       string
 	Name        string
@@ -223,6 +238,7 @@ func (q *Queries) ListSecretDirectAccess(ctx context.Context, secretID pgtype.UU
 	for rows.Next() {
 		var i ListSecretDirectAccessRow
 		if err := rows.Scan(
+			&i.GrantID,
 			&i.UserID,
 			&i.Email,
 			&i.Name,
@@ -243,7 +259,7 @@ func (q *Queries) ListSecretDirectAccess(ctx context.Context, secretID pgtype.UU
 }
 
 const listSecretGroupAccess = `-- name: ListSecretGroupAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name
 from grants g
 join users u on u.id = g.user_id
@@ -258,6 +274,7 @@ order by rg.name, u.email
 `
 
 type ListSecretGroupAccessRow struct {
+	GrantID     pgtype.UUID
 	UserID      pgtype.UUID
 	Email       string
 	Name        string
@@ -280,6 +297,7 @@ func (q *Queries) ListSecretGroupAccess(ctx context.Context, secretID pgtype.UUI
 	for rows.Next() {
 		var i ListSecretGroupAccessRow
 		if err := rows.Scan(
+			&i.GrantID,
 			&i.UserID,
 			&i.Email,
 			&i.Name,

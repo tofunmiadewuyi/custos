@@ -67,10 +67,22 @@ func (s *Server) handleGetHost(w http.ResponseWriter, r *http.Request) {
 }
 
 type hostAuditView struct {
-	Account     string    `json:"account"`
-	Allowed     bool      `json:"allowed"`
-	Fingerprint string    `json:"fingerprint"`
-	At          time.Time `json:"at"`
+	Account         string    `json:"account"`
+	Allowed         bool      `json:"allowed"`
+	Fingerprint     string    `json:"fingerprint"`
+	At              time.Time `json:"at"`
+	UserID          string    `json:"user_id,omitempty"`
+	UserEmail       string    `json:"user_email,omitempty"`
+	UserName        string    `json:"user_name,omitempty"`
+	UserDisplayName string    `json:"user_display_name,omitempty"`
+	UserRole        string    `json:"user_role,omitempty"`
+	UserStatus      string    `json:"user_status,omitempty"`
+}
+
+type hostRefreshView struct {
+	Connected bool   `json:"connected"`
+	KeyCount  int    `json:"key_count"`
+	Seq       uint64 `json:"seq"`
 }
 
 func (s *Server) handleHostAudit(w http.ResponseWriter, r *http.Request) {
@@ -84,18 +96,96 @@ func (s *Server) handleHostAudit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
-	rows, err := s.q.ListHostAccessLogs(r.Context(), hostID)
+	limit, cur, err := pageParams(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	filters, err := parseAuditFilters(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// Fetch one extra row to detect whether a next page exists.
+	rows, err := s.q.ListHostAccessLogs(r.Context(), db.ListHostAccessLogsParams{
+		HostID:    hostID,
+		CursorAt:  cur.At,
+		CursorID:  cur.ID,
+		From:      filters.From,
+		To:        filters.To,
+		Allowed:   filters.Allowed,
+		UserID:    filters.UserID,
+		Search:    filters.Search,
+		PageLimit: limit + 1,
+	})
 	if err != nil {
 		serverError(w, "could not load host audit", err)
 		return
 	}
+	var nextCursor string
+	if int32(len(rows)) > limit {
+		last := rows[limit-1]
+		nextCursor = encodeCursor(last.At, last.ID)
+		rows = rows[:limit]
+	}
 	views := make([]hostAuditView, 0, len(rows))
 	for _, row := range rows {
-		views = append(views, hostAuditView{
+		view := hostAuditView{
 			Account: row.Account, Allowed: row.Allowed, Fingerprint: row.Fingerprint, At: row.At.Time,
-		})
+			UserEmail: row.UserEmail, UserName: row.UserName, UserDisplayName: row.UserDisplayName,
+			UserRole: row.UserRole, UserStatus: row.UserStatus,
+		}
+		if row.UserID.Valid {
+			view.UserID = uuidString(row.UserID)
+		}
+		views = append(views, view)
 	}
-	s.writeResponse(w, auth.ClientPublicKey, views)
+	s.writeResponse(w, auth.ClientPublicKey, page[hostAuditView]{Items: views, NextCursor: nextCursor})
+}
+
+func (s *Server) handleRefreshHost(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	hostID, err := parseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "invalid host id", http.StatusBadRequest)
+		return
+	}
+	if !s.canHost(r.Context(), auth, "host.access", hostID) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	host, err := s.q.GetHostByID(r.Context(), hostID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, "host not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		serverError(w, "could not load host", err)
+		return
+	}
+	if host.Status != "active" {
+		http.Error(w, "host not active", http.StatusConflict)
+		return
+	}
+	snapshot, err := s.buildSnapshot(r.Context(), host)
+	if err != nil {
+		serverError(w, "could not build snapshot", err)
+		return
+	}
+	env, err := s.snapshotEnvelope(r.Context(), hostID, snapshot)
+	if err != nil {
+		serverError(w, "could not sign snapshot", err)
+		return
+	}
+	connected := s.hub.online(uuidString(hostID))
+	if connected {
+		s.hub.push(uuidString(hostID), env)
+	}
+	s.writeResponse(w, auth.ClientPublicKey, hostRefreshView{
+		Connected: connected,
+		KeyCount:  len(snapshot.Entries),
+		Seq:       env.Seq,
+	})
 }
 
 // handleRevokeHost marks a host revoked, then purges and severs it.

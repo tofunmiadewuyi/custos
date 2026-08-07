@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -105,6 +106,15 @@ func seedUser(t *testing.T, pool *pgxpool.Pool, email, role string) (userID, tok
 		t.Fatal(err)
 	}
 	return userID, token
+}
+
+func adminUserID(t *testing.T, pool *pgxpool.Pool) string {
+	t.Helper()
+	var userID string
+	if err := pool.QueryRow(context.Background(), `select id from users where email = 'admin@test'`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	return userID
 }
 
 func TestSetLifecycle(t *testing.T) {
@@ -312,6 +322,197 @@ func TestHostOperationPermissions(t *testing.T) {
 	requireCode(t, do(t, h, member, "POST", "/hosts/"+upgradeHostID+"/upgrade", `{"version":"bad"}`), http.StatusForbidden)
 	grantVia(t, h, admin, memberID, "host.upgrade", "host", upgradeHostID)
 	requireCode(t, do(t, h, member, "POST", "/hosts/"+upgradeHostID+"/upgrade", `{"version":"bad"}`), http.StatusBadRequest)
+}
+
+func TestHostAccessAuditMatchesSSHSnapshot(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	adminID := adminUserID(t, s.pool)
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+
+	rec := do(t, h, admin, "GET", "/hosts/"+hostID+"/access-audit", "")
+	requireCode(t, rec, http.StatusOK)
+	var audit hostAccessAuditView
+	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.Entries) != 0 {
+		t.Fatalf("admin API bypass must not appear as SSH access: %s", rec.Body.String())
+	}
+
+	grantVia(t, h, admin, adminID, "host.access", "host", hostID)
+	rec = do(t, h, admin, "GET", "/hosts/"+hostID+"/access-audit", "")
+	requireCode(t, rec, http.StatusOK)
+	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.Entries) != 0 {
+		t.Fatalf("host.access grant without an SSH key must not appear as SSH access: %s", rec.Body.String())
+	}
+
+	fp := seedKey(t, s.pool, adminID)
+	rec = do(t, h, admin, "GET", "/hosts/"+hostID+"/access-audit", "")
+	requireCode(t, rec, http.StatusOK)
+	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.Entries) != 1 || audit.Entries[0].Via != "direct" || audit.Entries[0].Permission != "host.access" {
+		t.Fatalf("explicit host.access grant should be reported as SSH access: %s", rec.Body.String())
+	}
+	if len(audit.Entries[0].Fingerprints) != 1 || audit.Entries[0].Fingerprints[0] != fp {
+		t.Fatalf("expected SSH key fingerprint in audit response: %s", rec.Body.String())
+	}
+}
+
+func TestHostAccessAuditIncludesGroupGrant(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	adminID := adminUserID(t, s.pool)
+	fp := seedKey(t, s.pool, adminID)
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+	groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"admins"}`))
+
+	requireCode(t, do(t, h, admin, "POST", "/groups/"+groupID+"/resources",
+		fmt.Sprintf(`{"resource_kind":"host","resource_id":%q}`, hostID)), http.StatusNoContent)
+	grantVia(t, h, admin, adminID, "host.access", "group", groupID)
+
+	rec := do(t, h, admin, "GET", "/hosts/"+hostID+"/access-audit", "")
+	requireCode(t, rec, http.StatusOK)
+	var audit hostAccessAuditView
+	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
+		t.Fatal(err)
+	}
+	if len(audit.Entries) != 1 || audit.Entries[0].Via != "group" || audit.Entries[0].GroupID != groupID {
+		t.Fatalf("group host.access grant should be reported as SSH access: %s", rec.Body.String())
+	}
+	if len(audit.Entries[0].Fingerprints) != 1 || audit.Entries[0].Fingerprints[0] != fp {
+		t.Fatalf("expected SSH key fingerprint in group audit response: %s", rec.Body.String())
+	}
+}
+
+func TestHostAuditEnrichesKnownFingerprints(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	adminID := adminUserID(t, s.pool)
+	knownFP := seedKey(t, s.pool, adminID)
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+
+	if _, err := s.pool.Exec(context.Background(),
+		`insert into ssh_access_logs (host_id, hostname, account, allowed, at, fingerprint)
+		 values ($1, 'h', 'sevena', true, now() - interval '1 minute', $2),
+		        ($1, 'h', 'sevena', true, now(), 'SHA256:unknown')`,
+		hostID, knownFP,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, h, admin, "GET", "/hosts/"+hostID+"/audit", "")
+	requireCode(t, rec, http.StatusOK)
+	var resp page[hostAuditView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	audit := resp.Items
+	if len(audit) != 2 {
+		t.Fatalf("expected two audit rows, got %s", rec.Body.String())
+	}
+	if audit[0].Fingerprint != "SHA256:unknown" || audit[0].UserID != "" {
+		t.Fatalf("unknown fingerprint should stay anonymous: %s", rec.Body.String())
+	}
+	if audit[1].Fingerprint != knownFP || audit[1].UserID != adminID || audit[1].UserEmail != "admin@test" {
+		t.Fatalf("known fingerprint should include user details: %s", rec.Body.String())
+	}
+}
+
+func TestHostAuditPaginates(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+
+	for i := 0; i < 5; i++ {
+		if _, err := s.pool.Exec(context.Background(),
+			`insert into ssh_access_logs (host_id, hostname, account, allowed, at, fingerprint)
+			 values ($1, 'h', 'sevena', true, now() - ($2 || ' seconds')::interval, 'SHA256:x')`,
+			hostID, i,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := do(t, h, admin, "GET", "/hosts/"+hostID+"/audit?limit=2", "")
+	requireCode(t, rec, http.StatusOK)
+	var first page[hostAuditView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.NextCursor == "" {
+		t.Fatalf("expected 2 items with a next cursor, got %s", rec.Body.String())
+	}
+
+	rec = do(t, h, admin, "GET", "/hosts/"+hostID+"/audit?limit=2&cursor="+url.QueryEscape(first.NextCursor), "")
+	requireCode(t, rec, http.StatusOK)
+	var second page[hostAuditView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 2 || second.NextCursor == "" {
+		t.Fatalf("expected 2 more items with a next cursor, got %s", rec.Body.String())
+	}
+	if !second.Items[0].At.Before(first.Items[1].At) {
+		t.Fatalf("page two should continue after page one")
+	}
+
+	rec = do(t, h, admin, "GET", "/hosts/"+hostID+"/audit?limit=2&cursor="+url.QueryEscape(second.NextCursor), "")
+	requireCode(t, rec, http.StatusOK)
+	var third page[hostAuditView]
+	if err := json.Unmarshal(rec.Body.Bytes(), &third); err != nil {
+		t.Fatal(err)
+	}
+	if len(third.Items) != 1 || third.NextCursor != "" {
+		t.Fatalf("last page should have 1 item and no cursor, got %s", rec.Body.String())
+	}
+}
+
+func TestHostAuditFilters(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	adminID := adminUserID(t, s.pool)
+	knownFP := seedKey(t, s.pool, adminID)
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+
+	if _, err := s.pool.Exec(context.Background(),
+		`insert into ssh_access_logs (host_id, hostname, account, allowed, at, fingerprint)
+		 values ($1, 'h', 'deploy', true,  now() - interval '2 hours', $2),
+		        ($1, 'h', 'root',   false, now() - interval '1 hour',  'SHA256:unknown')`,
+		hostID, knownFP,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	get := func(query string) page[hostAuditView] {
+		t.Helper()
+		rec := do(t, h, admin, "GET", "/hosts/"+hostID+"/audit"+query, "")
+		requireCode(t, rec, http.StatusOK)
+		var resp page[hostAuditView]
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+
+	if got := get("?success=false"); len(got.Items) != 1 || got.Items[0].Account != "root" {
+		t.Fatalf("success=false should return the denied row, got %+v", got.Items)
+	}
+	if got := get("?user_id=" + adminID); len(got.Items) != 1 || got.Items[0].UserID != adminID {
+		t.Fatalf("user_id filter should return the admin's row, got %+v", got.Items)
+	}
+	if got := get("?q=root"); len(got.Items) != 1 || got.Items[0].Account != "root" {
+		t.Fatalf("q=root should match the account, got %+v", got.Items)
+	}
+	from := time.Now().Add(-90 * time.Minute).UTC().Format(time.RFC3339)
+	if got := get("?from=" + url.QueryEscape(from)); len(got.Items) != 1 || got.Items[0].Account != "root" {
+		t.Fatalf("from filter should exclude the older row, got %+v", got.Items)
+	}
 }
 
 func do(t *testing.T, h http.Handler, token, method, path, body string) *httptest.ResponseRecorder {
@@ -723,6 +924,61 @@ func TestGroupDetailEnrichesResources(t *testing.T) {
 	}
 }
 
+func TestListGroupsForResource(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+	opsID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"ops"}`))
+	prodID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"prod"}`))
+	hiddenID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"hidden"}`))
+
+	for _, groupID := range []string{opsID, prodID, hiddenID} {
+		body := fmt.Sprintf(`{"resource_kind":"host","resource_id":%q}`, hostID)
+		requireCode(t, do(t, h, admin, "POST", "/groups/"+groupID+"/resources", body), http.StatusNoContent)
+	}
+
+	rec := do(t, h, admin, "GET", "/groups/resources/host/"+hostID, "")
+	requireCode(t, rec, http.StatusOK)
+	var adminGroups []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &adminGroups); err != nil {
+		t.Fatal(err)
+	}
+	if len(adminGroups) != 3 {
+		t.Fatalf("expected all host groups, got %s", rec.Body.String())
+	}
+
+	memberID, member := seedUser(t, s.pool, "resource-groups@test", "member")
+	grantVia(t, h, admin, memberID, "group.read", "group", opsID)
+	grantVia(t, h, admin, memberID, "group.read", "group", prodID)
+
+	rec = do(t, h, member, "GET", "/groups/resources/host/"+hostID, "")
+	requireCode(t, rec, http.StatusOK)
+	var memberGroups []struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &memberGroups); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, group := range memberGroups {
+		got[group.ID] = true
+		if group.ID == hiddenID {
+			t.Fatalf("member saw unreadable group: %s", rec.Body.String())
+		}
+	}
+	if len(memberGroups) != 2 || !got[opsID] || !got[prodID] {
+		t.Fatalf("expected readable host groups only, got %s", rec.Body.String())
+	}
+
+	requireCode(t, do(t, h, admin, "GET", "/groups/resources/bad/"+hostID, ""), http.StatusBadRequest)
+	requireCode(t, do(t, h, admin, "GET", "/groups/resources/host/not-a-uuid", ""), http.StatusBadRequest)
+}
+
 func TestGroupMembers(t *testing.T) {
 	s, admin := newTestServer(t)
 	h := s.Handler()
@@ -815,6 +1071,80 @@ func TestSuspendCutsSSH(t *testing.T) {
 
 	if snapshotHas(t, s, host, fp) {
 		t.Fatal("suspended user's key must be gone from the snapshot")
+	}
+}
+
+func TestAddKeyPushesGrantedHostSnapshot(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+	grantVia(t, h, admin, adminUserID(t, s.pool), "host.access", "host", hostID)
+
+	send := make(chan protocol.Envelope, 1)
+	s.hub.register(hostID, send, func() {})
+	defer s.hub.unregister(hostID, send)
+
+	const blob = "AAAAC3NzaC1lZDI1NTE5AAAAIF79/jbso5ZK5Lvu2nbla+Ba7nMgnFIiTRc+G1hohsYO"
+	body := fmt.Sprintf(`{"label":"laptop","public_key":"ssh-ed25519 %s user@host"}`, blob)
+	requireCode(t, do(t, h, admin, "POST", "/keys", body), http.StatusOK)
+
+	select {
+	case env := <-send:
+		if env.Type != protocol.TypeSnapshot {
+			t.Fatalf("got pushed envelope type %q, want snapshot", env.Type)
+		}
+		var snap protocol.Snapshot
+		if err := json.Unmarshal(env.Data, &snap); err != nil {
+			t.Fatal(err)
+		}
+		if len(snap.Entries) != 1 || snap.Entries[0].Fingerprint != "SHA256:KCcRgYXrek07AU5Sr8Uy/cTjHh/EjelltqNXfmHrVWc" {
+			t.Fatalf("pushed snapshot missing new key: %+v", snap.Entries)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for snapshot push after key add")
+	}
+}
+
+func TestRefreshHostPushesSnapshot(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	adminID := adminUserID(t, s.pool)
+	fp := seedKey(t, s.pool, adminID)
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+	grantVia(t, h, admin, adminID, "host.access", "host", hostID)
+
+	send := make(chan protocol.Envelope, 1)
+	s.hub.register(hostID, send, func() {})
+	defer s.hub.unregister(hostID, send)
+
+	rec := do(t, h, admin, "POST", "/hosts/"+hostID+"/refresh", "")
+	requireCode(t, rec, http.StatusOK)
+	var refreshed struct {
+		Connected bool   `json:"connected"`
+		KeyCount  int    `json:"key_count"`
+		Seq       uint64 `json:"seq"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed.Connected || refreshed.KeyCount != 1 {
+		t.Fatalf("unexpected refresh response: %s", rec.Body.String())
+	}
+
+	select {
+	case env := <-send:
+		if env.Type != protocol.TypeSnapshot {
+			t.Fatalf("got pushed envelope type %q, want snapshot", env.Type)
+		}
+		var snap protocol.Snapshot
+		if err := json.Unmarshal(env.Data, &snap); err != nil {
+			t.Fatal(err)
+		}
+		if len(snap.Entries) != 1 || snap.Entries[0].Fingerprint != fp {
+			t.Fatalf("pushed snapshot missing key %q: %+v", fp, snap.Entries)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for forced snapshot push")
 	}
 }
 

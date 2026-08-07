@@ -59,19 +59,76 @@ func (q *Queries) InsertSSHAccessLog(ctx context.Context, arg InsertSSHAccessLog
 }
 
 const listHostAccessLogs = `-- name: ListHostAccessLogs :many
-select account, allowed, fingerprint, at from ssh_access_logs
-where host_id = $1 order by at desc limit 100
+select l.id, l.account, l.allowed, l.fingerprint, l.at,
+       u.id as user_id,
+       coalesce(u.email, '') as user_email,
+       coalesce(u.name, '') as user_name,
+       coalesce(u.display_name, '') as user_display_name,
+       coalesce(u.role, '') as user_role,
+       coalesce(u.status, '') as user_status
+from ssh_access_logs l
+left join public_keys pk on pk.fingerprint = l.fingerprint
+left join users u on u.id = pk.user_id
+where l.host_id = $1
+  and (
+    $2::timestamptz is null
+    or (l.at, l.id) < ($2::timestamptz, $3::uuid)
+  )
+  and ($4::timestamptz is null or l.at >= $4::timestamptz)
+  and ($5::timestamptz is null or l.at <= $5::timestamptz)
+  and ($6::boolean is null or l.allowed = $6::boolean)
+  and ($7::uuid is null or u.id = $7::uuid)
+  and (
+    $8::text is null
+    or l.account ilike '%' || $8::text || '%'
+    or l.fingerprint ilike '%' || $8::text || '%'
+    or u.email ilike '%' || $8::text || '%'
+    or u.name ilike '%' || $8::text || '%'
+  )
+order by l.at desc, l.id desc
+limit $9
 `
 
-type ListHostAccessLogsRow struct {
-	Account     string
-	Allowed     bool
-	Fingerprint string
-	At          pgtype.Timestamptz
+type ListHostAccessLogsParams struct {
+	HostID    pgtype.UUID
+	CursorAt  pgtype.Timestamptz
+	CursorID  pgtype.UUID
+	From      pgtype.Timestamptz
+	To        pgtype.Timestamptz
+	Allowed   pgtype.Bool
+	UserID    pgtype.UUID
+	Search    pgtype.Text
+	PageLimit int32
 }
 
-func (q *Queries) ListHostAccessLogs(ctx context.Context, hostID pgtype.UUID) ([]ListHostAccessLogsRow, error) {
-	rows, err := q.db.Query(ctx, listHostAccessLogs, hostID)
+type ListHostAccessLogsRow struct {
+	ID              pgtype.UUID
+	Account         string
+	Allowed         bool
+	Fingerprint     string
+	At              pgtype.Timestamptz
+	UserID          pgtype.UUID
+	UserEmail       string
+	UserName        string
+	UserDisplayName string
+	UserRole        string
+	UserStatus      string
+}
+
+// Keyset pagination on (at, id) desc. Pass cursor_at/cursor_id null for the first page.
+// All filter args are nullable; a null arg disables that filter.
+func (q *Queries) ListHostAccessLogs(ctx context.Context, arg ListHostAccessLogsParams) ([]ListHostAccessLogsRow, error) {
+	rows, err := q.db.Query(ctx, listHostAccessLogs,
+		arg.HostID,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.From,
+		arg.To,
+		arg.Allowed,
+		arg.UserID,
+		arg.Search,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -80,10 +137,17 @@ func (q *Queries) ListHostAccessLogs(ctx context.Context, hostID pgtype.UUID) ([
 	for rows.Next() {
 		var i ListHostAccessLogsRow
 		if err := rows.Scan(
+			&i.ID,
 			&i.Account,
 			&i.Allowed,
 			&i.Fingerprint,
 			&i.At,
+			&i.UserID,
+			&i.UserEmail,
+			&i.UserName,
+			&i.UserDisplayName,
+			&i.UserRole,
+			&i.UserStatus,
 		); err != nil {
 			return nil, err
 		}

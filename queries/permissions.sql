@@ -33,7 +33,7 @@ select exists (
 );
 
 -- name: ListSecretDirectAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 from grants g
 join users u on u.id = g.user_id
 where g.revoked_at is null
@@ -41,7 +41,7 @@ where g.revoked_at is null
 order by u.email;
 
 -- name: ListSecretGroupAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name
 from grants g
 join users u on u.id = g.user_id
@@ -86,19 +86,24 @@ select exists (
 );
 
 -- name: ListHostDirectAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
+       g.permission, g.created_at, array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
 from grants g
-join users u on u.id = g.user_id
+join users u on u.id = g.user_id and u.status = 'active'
+join public_keys pk on pk.user_id = g.user_id
 where g.revoked_at is null
   and g.permission = 'host.access'
   and g.target_kind = 'host' and g.target_id = @host_id
+group by g.id, u.id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at
 order by u.email;
 
 -- name: ListHostGroupAccess :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
-       rg.id as group_id, rg.name as group_name
+select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
+       rg.id as group_id, rg.name as group_name,
+       array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
 from grants g
-join users u on u.id = g.user_id
+join users u on u.id = g.user_id and u.status = 'active'
+join public_keys pk on pk.user_id = g.user_id
 join resource_groups rg on rg.id = g.target_id
 where g.revoked_at is null
   and g.permission = 'host.access'
@@ -107,6 +112,7 @@ where g.revoked_at is null
     select group_id from group_resources
     where resource_kind = 'host' and resource_id = @host_id
   )
+group by g.id, u.id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at, rg.id, rg.name
 order by rg.name, u.email;
 
 -- name: ListActiveAdmins :many
