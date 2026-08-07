@@ -19,6 +19,7 @@ type EnrollRequest struct {
 	PublicKey     string `json:"public_key"`     // daemon identity (ed25519, signing), base64
 	EncryptionKey string `json:"encryption_key"` // daemon X25519 public key for sealed secrets, base64
 	MachineID     string `json:"machine_id"`     // app-specific hash of /etc/machine-id; empty if unavailable
+	PriorHostID   string `json:"prior_host_id,omitempty"` // this daemon's previous host id, if re-enrolling; dedup fallback when machine_id is empty
 }
 
 type EnrollResponse struct {

@@ -85,6 +85,21 @@ func (s *Server) enroll(ctx context.Context, req protocol.EnrollRequest) (string
 		}
 	}
 
+	// Fallback dedup when machine_id is unavailable: a re-enrolling daemon sends
+	// its prior host id. Reject only if that host is still active; a revoked one
+	// enrolls fresh (and must re-earn its grants). Unknown/garbage id is ignored.
+	if req.PriorHostID != "" {
+		if priorID, perr := parseUUID(req.PriorHostID); perr == nil {
+			if h, err := q.GetHostByID(ctx, priorID); err == nil {
+				if h.Status == "active" {
+					return "", errAlreadyEnrolled
+				}
+			} else if !errors.Is(err, pgx.ErrNoRows) {
+				return "", err
+			}
+		}
+	}
+
 	name := req.Hostname
 	if tok.Label.Valid && tok.Label.String != "" {
 		name = tok.Label.String

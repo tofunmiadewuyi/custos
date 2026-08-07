@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,21 +18,29 @@ import (
 	"github.com/tofunmiadewuyi/custos/internal/protocol"
 )
 
-// machineID returns an app-specific hash of the systemd machine-id, so the same
-// box is recognizable on re-enroll without shipping the raw id. Empty if the
-// machine has no id (non-systemd, some containers) — the guard just won't apply.
+// stable, wipe-surviving id sources, first non-empty wins; app containers have none
+var machineIDSources = []string{
+	"/etc/machine-id",
+	"/var/lib/dbus/machine-id",
+	"/sys/class/dmi/id/product_uuid",
+}
+
+// machineID hashes the first available machine identifier; empty means not a real host
 func machineID() string {
-	raw, err := os.ReadFile("/etc/machine-id")
-	if err != nil {
-		if raw, err = os.ReadFile("/var/lib/dbus/machine-id"); err != nil {
-			return ""
+	var raw string
+	for _, src := range machineIDSources {
+		b, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		if raw = strings.TrimSpace(string(b)); raw != "" {
+			break
 		}
 	}
-	id := strings.TrimSpace(string(raw))
-	if id == "" {
+	if raw == "" {
 		return ""
 	}
-	sum := sha256.Sum256([]byte("custos-host:" + id))
+	sum := sha256.Sum256([]byte("custos-host:" + raw))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -44,12 +51,17 @@ type EnrollOptions struct {
 	Hostname     string
 }
 
-// Enroll registers this host with the control plane: it generates the identity
-// keypair, exchanges the admin token for a host ID, and persists both. The
-// private key never leaves the machine
+// Enroll registers this host with the control plane: it generates a fresh
+// identity keypair, exchanges the admin token for a host ID, and persists both.
+// The private key never leaves the machine. Re-enrollment is allowed: an
+// already-enrolled box just re-registers (revoke frees the machine server-side,
+// so this is how a revoked host recovers). New keys are written only after the
+// control plane accepts, so a still-active box that re-enrolls gets a 409 and
+// keeps its working identity. The control plane is the authority on duplicates.
 func Enroll(ctx context.Context, store *Store, opts EnrollOptions) error {
-	if store.Enrolled() {
-		return errors.New("already enrolled")
+	mID := machineID()
+	if mID == "" {
+		return fmt.Errorf("no stable machine id (%s); custos targets machines with their own sshd, not app containers", strings.Join(machineIDSources, ", "))
 	}
 	kp, err := identity.GenerateKeyPair()
 	if err != nil {
@@ -59,12 +71,19 @@ func Enroll(ctx context.Context, store *Store, opts EnrollOptions) error {
 	if err != nil {
 		return err
 	}
+	// Carry the prior host id (if any) so the server can dedup re-enrolls even
+	// when machine_id is unavailable. Best-effort: a missing config just omits it.
+	var priorHostID string
+	if cfg, err := store.LoadConfig(); err == nil {
+		priorHostID = cfg.HostID
+	}
 	resp, err := postEnroll(ctx, opts.ControlPlane, protocol.EnrollRequest{
 		Token:         opts.Token,
 		Hostname:      opts.Hostname,
 		PublicKey:     kp.PublicKey(),
 		EncryptionKey: encKP.PublicKey(),
-		MachineID:     machineID(),
+		MachineID:     mID,
+		PriorHostID:   priorHostID,
 	})
 	if err != nil {
 		return err
