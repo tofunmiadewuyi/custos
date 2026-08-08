@@ -51,6 +51,10 @@ func handleSecret(conn net.Conn, store *SecretStore, onRead func(protocol.Secret
 
 	values, asUser, ok := store.Get(name)
 	if !ok {
+		if !store.Ready() {
+			writeSecret(conn, secretResponse{Error: "not ready"})
+			return
+		}
 		writeSecret(conn, secretResponse{Error: "no such set"})
 		return
 	}
@@ -119,6 +123,9 @@ func fetchSetOnce(socket, name string) (map[string]string, bool, error) {
 	}
 	if resp.Error == "forbidden" {
 		return nil, false, errors.New("forbidden") // final; do not retry
+	}
+	if resp.Error == "no such set" {
+		return nil, false, errors.New("no such set") // synced; typo/missing set is final
 	}
 	return nil, true, errors.New(resp.Error) // e.g. not synced yet; retry
 }

@@ -2,7 +2,8 @@ package daemon
 
 import (
 	"net"
-	"path/filepath"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -12,7 +13,12 @@ import (
 
 func serveStore(t *testing.T, store *SecretStore) string {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "s.sock")
+	dir, err := os.MkdirTemp("", "cst")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := dir + "/s.sock"
 	ln, err := net.Listen("unix", sock)
 	if err != nil {
 		t.Fatal(err)
@@ -51,5 +57,44 @@ func TestFetchScopedSetForbidden(t *testing.T) {
 
 	if _, err := FetchSet(sock, "scoped", time.Second); err == nil {
 		t.Fatal("expected a scoped set for another user to be forbidden")
+	}
+}
+
+func TestFetchMissingSetFailsFastAfterSync(t *testing.T) {
+	kp, _ := hybrid.GenerateKeyPair()
+	store := NewSecretStore(kp)
+	store.Apply(sealBundle(t, kp, protocol.SecretSet{
+		Name: "billing", Version: 1, Values: map[string]string{"K": "v"},
+	}), 1)
+	sock := serveStore(t, store)
+
+	start := time.Now()
+	_, err := FetchSet(sock, "missing", 5*time.Second)
+	if err == nil {
+		t.Fatal("expected missing set to fail")
+	}
+	if !strings.Contains(err.Error(), "no such set") {
+		t.Fatalf("err = %v, want no such set", err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("missing synced set should fail fast, took %s", elapsed)
+	}
+}
+
+func TestFetchMissingSetRetriesBeforeSync(t *testing.T) {
+	kp, _ := hybrid.GenerateKeyPair()
+	store := NewSecretStore(kp)
+	sock := serveStore(t, store)
+
+	start := time.Now()
+	_, err := FetchSet(sock, "billing", 1200*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected unsynced set fetch to fail")
+	}
+	if !strings.Contains(err.Error(), "not ready") {
+		t.Fatalf("err = %v, want not ready", err)
+	}
+	if elapsed := time.Since(start); elapsed < time.Second {
+		t.Fatalf("unsynced fetch should retry until timeout, took %s", elapsed)
 	}
 }

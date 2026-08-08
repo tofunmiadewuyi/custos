@@ -11,10 +11,11 @@ import (
 
 // SecretStore holds the host's opened machine-secret sets in memory only, never on disk.
 type SecretStore struct {
-	mu   sync.RWMutex
-	seq  uint64
-	sets map[string]openedSet // by set name
-	key  *hybrid.KeyPair      // opens sealed payloads; nil = machine secrets disabled
+	mu    sync.RWMutex
+	seq   uint64
+	ready bool
+	sets  map[string]openedSet // by set name
+	key   *hybrid.KeyPair      // opens sealed payloads; nil = machine secrets disabled
 }
 
 type openedSet struct {
@@ -32,6 +33,14 @@ func (s *SecretStore) Seq() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.seq
+}
+
+// Ready reports whether the daemon has received and opened at least one
+// authoritative secret-set bundle from the control plane.
+func (s *SecretStore) Ready() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ready
 }
 
 // Apply opens the sealed bundle and replaces the whole in-memory set.
@@ -56,6 +65,7 @@ func (s *SecretStore) Apply(sealed protocol.SealedSecretSets, seq uint64) error 
 	defer s.mu.Unlock()
 	s.sets = opened
 	s.seq = seq
+	s.ready = true
 	return nil
 }
 
