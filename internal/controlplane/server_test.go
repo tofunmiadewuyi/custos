@@ -28,7 +28,7 @@ func TestRoutesResolve(t *testing.T) {
 		{"GET", "/secrets"}, {"GET", "/secrets/x/audit"},
 		{"GET", "/groups"}, {"GET", "/groups/x/members"}, {"PUT", "/groups/x"}, {"POST", "/groups/x/resources"},
 		{"GET", "/sets"}, {"PUT", "/sets/x/entries/KEY"},
-		{"POST", "/hosts/x/sets"}, {"GET", "/hosts/x"}, {"GET", "/hosts/x/audit"},
+		{"POST", "/hosts/x/sets"}, {"GET", "/hosts/x"}, {"GET", "/hosts/x/audit"}, {"POST", "/hosts/x/refresh"},
 		{"GET", "/users"}, {"POST", "/users/x/suspend"},
 		{"GET", "/grants"}, {"GET", "/invitations"},
 		{"GET", "/hosts"}, {"GET", "/secrets/x/access-audit"}, {"GET", "/hosts/x/access-audit"},

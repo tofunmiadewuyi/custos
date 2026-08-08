@@ -54,7 +54,7 @@ func (q *Queries) ListActiveAdmins(ctx context.Context) ([]ListActiveAdminsRow, 
 const listGlobalPermissions = `-- name: ListGlobalPermissions :many
 select key as permission, description
 from permissions
-where key in ('secret.add', 'group.create', 'set.add')
+where key in ('secret.add', 'group.create', 'host.add', 'set.add')
 order by key
 `
 
@@ -83,12 +83,166 @@ func (q *Queries) ListGlobalPermissions(ctx context.Context) ([]ListGlobalPermis
 	return items, nil
 }
 
+const listHostAccessPathsForUsers = `-- name: ListHostAccessPathsForUsers :many
+select user_id, grant_id, permission, created_at, via, group_id, group_name
+from (
+  select g.user_id, g.id as grant_id, g.permission, g.created_at,
+         'direct'::text as via, null::uuid as group_id, ''::text as group_name
+  from grants g
+  where g.revoked_at is null
+    and g.permission = 'host.access'
+    and g.target_kind = 'host'
+    and g.target_id = $1
+    and g.user_id = any($2::uuid[])
+  union all
+  select g.user_id, g.id as grant_id, g.permission, g.created_at,
+         'group'::text as via, rg.id as group_id, rg.name as group_name
+  from grants g
+  join resource_groups rg on rg.id = g.target_id
+  where g.revoked_at is null
+    and g.permission = 'host.access'
+    and g.target_kind = 'group'
+    and g.user_id = any($2::uuid[])
+    and rg.id in (
+      select group_id from group_resources
+      where resource_kind = 'host' and resource_id = $1
+    )
+) paths
+order by user_id, via, group_name, created_at, grant_id
+`
+
+type ListHostAccessPathsForUsersParams struct {
+	HostID  pgtype.UUID
+	UserIds []pgtype.UUID
+}
+
+type ListHostAccessPathsForUsersRow struct {
+	UserID     pgtype.UUID
+	GrantID    pgtype.UUID
+	Permission string
+	CreatedAt  pgtype.Timestamptz
+	Via        string
+	GroupID    pgtype.UUID
+	GroupName  string
+}
+
+func (q *Queries) ListHostAccessPathsForUsers(ctx context.Context, arg ListHostAccessPathsForUsersParams) ([]ListHostAccessPathsForUsersRow, error) {
+	rows, err := q.db.Query(ctx, listHostAccessPathsForUsers, arg.HostID, arg.UserIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostAccessPathsForUsersRow{}
+	for rows.Next() {
+		var i ListHostAccessPathsForUsersRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.GrantID,
+			&i.Permission,
+			&i.CreatedAt,
+			&i.Via,
+			&i.GroupID,
+			&i.GroupName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listHostAccessUsers = `-- name: ListHostAccessUsers :many
+with access_users as (
+  select distinct u.id as user_id, u.email, u.name, u.display_name, u.role, u.status
+  from grants g
+  join users u on u.id = g.user_id and u.status = 'active'
+  where g.revoked_at is null
+    and g.permission = 'host.access'
+    and (
+      (g.target_kind = 'host' and g.target_id = $4)
+      or (g.target_kind = 'group' and g.target_id in (
+        select group_id from group_resources
+        where resource_kind = 'host' and resource_id = $4
+      ))
+    )
+)
+select au.user_id, au.email, au.name, au.display_name, au.role, au.status,
+       coalesce(
+         array_agg(distinct pk.fingerprint order by pk.fingerprint) filter (where pk.fingerprint is not null),
+         array[]::text[]
+       )::text[] as fingerprints
+from access_users au
+left join public_keys pk on pk.user_id = au.user_id
+where $1::text = ''
+   or (au.email, au.user_id) > ($1::text, $2::uuid)
+group by au.user_id, au.email, au.name, au.display_name, au.role, au.status
+order by au.email, au.user_id
+limit $3
+`
+
+type ListHostAccessUsersParams struct {
+	CursorEmail string
+	CursorID    pgtype.UUID
+	PageLimit   int32
+	HostID      pgtype.UUID
+}
+
+type ListHostAccessUsersRow struct {
+	UserID       pgtype.UUID
+	Email        string
+	Name         string
+	DisplayName  pgtype.Text
+	Role         string
+	Status       string
+	Fingerprints []string
+}
+
+func (q *Queries) ListHostAccessUsers(ctx context.Context, arg ListHostAccessUsersParams) ([]ListHostAccessUsersRow, error) {
+	rows, err := q.db.Query(ctx, listHostAccessUsers,
+		arg.CursorEmail,
+		arg.CursorID,
+		arg.PageLimit,
+		arg.HostID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListHostAccessUsersRow{}
+	for rows.Next() {
+		var i ListHostAccessUsersRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.DisplayName,
+			&i.Role,
+			&i.Status,
+			&i.Fingerprints,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listHostDirectAccess = `-- name: ListHostDirectAccess :many
 select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
-       g.permission, g.created_at, array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
+       g.permission, g.created_at,
+       coalesce(
+         array_agg(pk.fingerprint order by pk.fingerprint) filter (where pk.fingerprint is not null),
+         array[]::text[]
+       )::text[] as fingerprints
 from grants g
 join users u on u.id = g.user_id and u.status = 'active'
-join public_keys pk on pk.user_id = g.user_id
+left join public_keys pk on pk.user_id = g.user_id
 where g.revoked_at is null
   and g.permission = 'host.access'
   and g.target_kind = 'host' and g.target_id = $1
@@ -143,10 +297,13 @@ func (q *Queries) ListHostDirectAccess(ctx context.Context, hostID pgtype.UUID) 
 const listHostGroupAccess = `-- name: ListHostGroupAccess :many
 select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name,
-       array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
+       coalesce(
+         array_agg(pk.fingerprint order by pk.fingerprint) filter (where pk.fingerprint is not null),
+         array[]::text[]
+       )::text[] as fingerprints
 from grants g
 join users u on u.id = g.user_id and u.status = 'active'
-join public_keys pk on pk.user_id = g.user_id
+left join public_keys pk on pk.user_id = g.user_id
 join resource_groups rg on rg.id = g.target_id
 where g.revoked_at is null
   and g.permission = 'host.access'

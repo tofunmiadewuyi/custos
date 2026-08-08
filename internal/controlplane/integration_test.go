@@ -204,6 +204,7 @@ func TestMeIncludesGlobalPermissions(t *testing.T) {
 
 	t.Run("member sees active global grants", func(t *testing.T) {
 		grantVia(t, h, admin, memberID, "group.create", "global", "")
+		grantVia(t, h, admin, memberID, "host.add", "global", "")
 		grantVia(t, h, admin, memberID, "set.add", "global", "")
 
 		rec := do(t, h, member, "GET", "/me", "")
@@ -223,7 +224,7 @@ func TestMeIncludesGlobalPermissions(t *testing.T) {
 		for _, permission := range me.GlobalPermissions {
 			got[permission] = true
 		}
-		for _, permission := range []string{"group.create", "set.add"} {
+		for _, permission := range []string{"group.create", "host.add", "set.add"} {
 			if !got[permission] {
 				t.Fatalf("missing global permission %q in %s", permission, rec.Body.String())
 			}
@@ -246,7 +247,7 @@ func TestMeIncludesGlobalPermissions(t *testing.T) {
 		for _, permission := range me.GlobalPermissions {
 			got[permission] = true
 		}
-		for _, permission := range []string{"group.create", "secret.add", "set.add"} {
+		for _, permission := range []string{"group.create", "host.add", "secret.add", "set.add"} {
 			if !got[permission] {
 				t.Fatalf("missing admin global permission %q in %s", permission, rec.Body.String())
 			}
@@ -324,7 +325,7 @@ func TestHostOperationPermissions(t *testing.T) {
 	requireCode(t, do(t, h, member, "POST", "/hosts/"+upgradeHostID+"/upgrade", `{"version":"bad"}`), http.StatusBadRequest)
 }
 
-func TestHostAccessAuditMatchesSSHSnapshot(t *testing.T) {
+func TestHostAccessAuditIncludesGrantHolders(t *testing.T) {
 	s, admin := newTestServer(t)
 	h := s.Handler()
 	adminID := adminUserID(t, s.pool)
@@ -337,7 +338,7 @@ func TestHostAccessAuditMatchesSSHSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(audit.Entries) != 0 {
-		t.Fatalf("admin API bypass must not appear as SSH access: %s", rec.Body.String())
+		t.Fatalf("admin API bypass must not appear as a host grant: %s", rec.Body.String())
 	}
 
 	grantVia(t, h, admin, adminID, "host.access", "host", hostID)
@@ -346,8 +347,12 @@ func TestHostAccessAuditMatchesSSHSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
 		t.Fatal(err)
 	}
-	if len(audit.Entries) != 0 {
-		t.Fatalf("host.access grant without an SSH key must not appear as SSH access: %s", rec.Body.String())
+	if len(audit.Entries) != 1 || len(audit.Entries[0].Paths) != 1 ||
+		audit.Entries[0].Paths[0].Via != "direct" || audit.Entries[0].Paths[0].Permission != "host.access" {
+		t.Fatalf("host.access grant should be reported even before an SSH key exists: %s", rec.Body.String())
+	}
+	if len(audit.Entries[0].Fingerprints) != 0 {
+		t.Fatalf("grant without an SSH key should report no fingerprints: %s", rec.Body.String())
 	}
 
 	fp := seedKey(t, s.pool, adminID)
@@ -356,8 +361,9 @@ func TestHostAccessAuditMatchesSSHSnapshot(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
 		t.Fatal(err)
 	}
-	if len(audit.Entries) != 1 || audit.Entries[0].Via != "direct" || audit.Entries[0].Permission != "host.access" {
-		t.Fatalf("explicit host.access grant should be reported as SSH access: %s", rec.Body.String())
+	if len(audit.Entries) != 1 || len(audit.Entries[0].Paths) != 1 ||
+		audit.Entries[0].Paths[0].Via != "direct" || audit.Entries[0].Paths[0].Permission != "host.access" {
+		t.Fatalf("explicit host.access grant should be reported in host audit: %s", rec.Body.String())
 	}
 	if len(audit.Entries[0].Fingerprints) != 1 || audit.Entries[0].Fingerprints[0] != fp {
 		t.Fatalf("expected SSH key fingerprint in audit response: %s", rec.Body.String())
@@ -368,7 +374,6 @@ func TestHostAccessAuditIncludesGroupGrant(t *testing.T) {
 	s, admin := newTestServer(t)
 	h := s.Handler()
 	adminID := adminUserID(t, s.pool)
-	fp := seedKey(t, s.pool, adminID)
 	hostID := seedHost(t, s.pool, []string{"deploy"})
 	groupID := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"admins"}`))
 
@@ -382,11 +387,60 @@ func TestHostAccessAuditIncludesGroupGrant(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
 		t.Fatal(err)
 	}
-	if len(audit.Entries) != 1 || audit.Entries[0].Via != "group" || audit.Entries[0].GroupID != groupID {
-		t.Fatalf("group host.access grant should be reported as SSH access: %s", rec.Body.String())
+	if len(audit.Entries) != 1 || len(audit.Entries[0].Paths) != 1 ||
+		audit.Entries[0].Paths[0].Via != "group" || audit.Entries[0].Paths[0].GroupID != groupID {
+		t.Fatalf("group host.access grant should include the group path: %s", rec.Body.String())
+	}
+	if len(audit.Entries[0].Fingerprints) != 0 {
+		t.Fatalf("group grant without an SSH key should report no fingerprints: %s", rec.Body.String())
+	}
+
+	fp := seedKey(t, s.pool, adminID)
+	rec = do(t, h, admin, "GET", "/hosts/"+hostID+"/access-audit", "")
+	requireCode(t, rec, http.StatusOK)
+	if err := json.Unmarshal(rec.Body.Bytes(), &audit); err != nil {
+		t.Fatal(err)
 	}
 	if len(audit.Entries[0].Fingerprints) != 1 || audit.Entries[0].Fingerprints[0] != fp {
 		t.Fatalf("expected SSH key fingerprint in group audit response: %s", rec.Body.String())
+	}
+}
+
+func TestHostAccessAuditPaginatesByUserWithPaths(t *testing.T) {
+	s, admin := newTestServer(t)
+	h := s.Handler()
+	hostID := seedHost(t, s.pool, []string{"deploy"})
+	firstID, _ := seedUser(t, s.pool, "aaa-access@test", "member")
+	secondID, _ := seedUser(t, s.pool, "bbb-access@test", "member")
+
+	groupA := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"a"}`))
+	groupB := idOf(t, do(t, h, admin, "POST", "/groups", `{"name":"b"}`))
+	for _, groupID := range []string{groupA, groupB} {
+		requireCode(t, do(t, h, admin, "POST", "/groups/"+groupID+"/resources",
+			fmt.Sprintf(`{"resource_kind":"host","resource_id":%q}`, hostID)), http.StatusNoContent)
+		grantVia(t, h, admin, firstID, "host.access", "group", groupID)
+	}
+	grantVia(t, h, admin, firstID, "host.access", "host", hostID)
+	grantVia(t, h, admin, secondID, "host.access", "host", hostID)
+
+	rec := do(t, h, admin, "GET", "/hosts/"+hostID+"/access-audit?limit=1", "")
+	requireCode(t, rec, http.StatusOK)
+	var first hostAccessAuditView
+	if err := json.Unmarshal(rec.Body.Bytes(), &first); err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Entries) != 1 || first.Entries[0].UserID != firstID || len(first.Entries[0].Paths) != 3 || first.NextCursor == "" {
+		t.Fatalf("first page should contain one user with all access paths and a cursor: %s", rec.Body.String())
+	}
+
+	rec = do(t, h, admin, "GET", "/hosts/"+hostID+"/access-audit?limit=1&cursor="+url.QueryEscape(first.NextCursor), "")
+	requireCode(t, rec, http.StatusOK)
+	var second hostAccessAuditView
+	if err := json.Unmarshal(rec.Body.Bytes(), &second); err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Entries) != 1 || second.Entries[0].UserID != secondID || len(second.Entries[0].Paths) != 1 || second.NextCursor != "" {
+		t.Fatalf("second page should advance to next user, got %s", rec.Body.String())
 	}
 }
 
@@ -689,8 +743,12 @@ func TestAuthzMatrix(t *testing.T) {
 		}
 	})
 
-	t.Run("members can create enrollment tokens", func(t *testing.T) {
+	t.Run("members need host.add to create enrollment tokens", func(t *testing.T) {
 		rec := do(t, h, member, "POST", "/enroll-tokens", `{"label":"member-host","accounts":["deploy"],"ttl_hours":1}`)
+		requireCode(t, rec, http.StatusForbidden)
+
+		grantVia(t, h, admin, memberID, "host.add", "global", "")
+		rec = do(t, h, member, "POST", "/enroll-tokens", `{"label":"member-host","accounts":["deploy"],"ttl_hours":1}`)
 		requireCode(t, rec, http.StatusOK)
 		var tokenResp struct {
 			Token string `json:"token"`

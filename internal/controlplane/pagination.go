@@ -29,6 +29,12 @@ type atCursor struct {
 	ID pgtype.UUID
 }
 
+// userCursor is a keyset cursor over rows ordered by (email, user_id) asc.
+type userCursor struct {
+	Email string
+	ID    pgtype.UUID
+}
+
 // pageParams parses ?limit and ?cursor. A missing/blank cursor yields a zero
 // (null) atCursor, which the queries treat as the first page.
 func pageParams(r *http.Request) (limit int32, cur atCursor, err error) {
@@ -44,6 +50,22 @@ func pageParams(r *http.Request) (limit int32, cur atCursor, err error) {
 		limit = int32(n)
 	}
 	cur, err = decodeCursor(r.URL.Query().Get("cursor"))
+	return limit, cur, err
+}
+
+func userPageParams(r *http.Request) (limit int32, cur userCursor, err error) {
+	limit = defaultPageSize
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		n, e := strconv.Atoi(raw)
+		if e != nil || n < 1 {
+			return 0, userCursor{}, errors.New("invalid limit")
+		}
+		if n > maxPageSize {
+			n = maxPageSize
+		}
+		limit = int32(n)
+	}
+	cur, err = decodeUserCursor(r.URL.Query().Get("cursor"))
 	return limit, cur, err
 }
 
@@ -127,4 +149,28 @@ func decodeCursor(raw string) (atCursor, error) {
 		return atCursor{}, errors.New("invalid cursor")
 	}
 	return atCursor{At: pgtype.Timestamptz{Time: t, Valid: true}, ID: uid}, nil
+}
+
+func encodeUserCursor(email string, id pgtype.UUID) string {
+	s := email + "\x00" + uuidString(id)
+	return base64.RawURLEncoding.EncodeToString([]byte(s))
+}
+
+func decodeUserCursor(raw string) (userCursor, error) {
+	if raw == "" {
+		return userCursor{}, nil
+	}
+	b, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return userCursor{}, errors.New("invalid cursor")
+	}
+	email, id, ok := strings.Cut(string(b), "\x00")
+	if !ok || email == "" {
+		return userCursor{}, errors.New("invalid cursor")
+	}
+	uid, err := parseUUID(id)
+	if err != nil {
+		return userCursor{}, errors.New("invalid cursor")
+	}
+	return userCursor{Email: email, ID: uid}, nil
 }

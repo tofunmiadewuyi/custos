@@ -306,6 +306,7 @@ create trigger no_truncate before truncate on set_audit_logs
 insert into permissions (key, description) values
   ('secret.add',    'Create secrets'),                              -- global
   ('group.create',  'Create resource groups'),                     -- global
+  ('host.add',      'Create host enrollment tokens'),               -- global
   ('set.add',       'Create machine secret sets'),                 -- global
   ('secret.read',   'View a secret value'),                        -- scoped
   ('secret.update', 'Modify secrets'),                             -- scoped

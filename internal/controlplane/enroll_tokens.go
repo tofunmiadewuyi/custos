@@ -21,6 +21,11 @@ type createEnrollTokenResponse struct {
 }
 
 func (s *Server) handleCreateEnrollToken(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	if !s.canGlobal(r.Context(), auth, "host.add") {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	var req createEnrollTokenRequest
 	if err := s.readRequest(r, &req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -40,7 +45,6 @@ func (s *Server) handleCreateEnrollToken(w http.ResponseWriter, r *http.Request)
 		serverError(w, "internal error", err)
 		return
 	}
-	auth := authFrom(r.Context())
 	expiresAt := time.Now().Add(ttl)
 	if _, err := s.q.CreateEnrollmentToken(r.Context(), db.CreateEnrollmentTokenParams{
 		TokenHash: hash,

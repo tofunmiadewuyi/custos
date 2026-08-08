@@ -77,6 +77,59 @@ func (q *Queries) GetGroup(ctx context.Context, id pgtype.UUID) (ResourceGroup, 
 	return i, err
 }
 
+const listGroupMembers = `-- name: ListGroupMembers :many
+select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
+       g.id as grant_id, g.permission, g.created_at as granted_at
+from grants g
+join users u on u.id = g.user_id
+where g.target_kind = 'group'
+  and g.target_id = $1
+  and g.revoked_at is null
+order by u.email, g.permission
+`
+
+type ListGroupMembersRow struct {
+	UserID      pgtype.UUID
+	Email       string
+	Name        string
+	DisplayName pgtype.Text
+	Role        string
+	Status      string
+	GrantID     pgtype.UUID
+	Permission  string
+	GrantedAt   pgtype.Timestamptz
+}
+
+func (q *Queries) ListGroupMembers(ctx context.Context, targetID pgtype.UUID) ([]ListGroupMembersRow, error) {
+	rows, err := q.db.Query(ctx, listGroupMembers, targetID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListGroupMembersRow{}
+	for rows.Next() {
+		var i ListGroupMembersRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Email,
+			&i.Name,
+			&i.DisplayName,
+			&i.Role,
+			&i.Status,
+			&i.GrantID,
+			&i.Permission,
+			&i.GrantedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listGroupResources = `-- name: ListGroupResources :many
 select gr.resource_kind, gr.resource_id, gr.added_at,
        h.id as host_id, coalesce(h.name, '') as host_name, coalesce(h.hostname, '') as host_hostname,
@@ -202,48 +255,33 @@ func (q *Queries) ListGroups(ctx context.Context) ([]ResourceGroup, error) {
 	return items, nil
 }
 
-const listGroupMembers = `-- name: ListGroupMembers :many
-select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
-       g.id as grant_id, g.permission, g.created_at as granted_at
-from grants g
-join users u on u.id = g.user_id
-where g.target_kind = 'group'
-  and g.target_id = $1
-  and g.revoked_at is null
-order by u.email, g.permission
+const listGroupsForResource = `-- name: ListGroupsForResource :many
+select rg.id, rg.name, rg.description, rg.created_at
+from group_resources gr
+join resource_groups rg on rg.id = gr.group_id
+where gr.resource_kind = $1 and gr.resource_id = $2
+order by rg.name
 `
 
-type ListGroupMembersRow struct {
-	UserID      pgtype.UUID
-	Email       string
-	Name        string
-	DisplayName pgtype.Text
-	Role        string
-	Status      string
-	GrantID     pgtype.UUID
-	Permission  string
-	GrantedAt   pgtype.Timestamptz
+type ListGroupsForResourceParams struct {
+	ResourceKind string
+	ResourceID   pgtype.UUID
 }
 
-func (q *Queries) ListGroupMembers(ctx context.Context, targetID pgtype.UUID) ([]ListGroupMembersRow, error) {
-	rows, err := q.db.Query(ctx, listGroupMembers, targetID)
+func (q *Queries) ListGroupsForResource(ctx context.Context, arg ListGroupsForResourceParams) ([]ResourceGroup, error) {
+	rows, err := q.db.Query(ctx, listGroupsForResource, arg.ResourceKind, arg.ResourceID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []ListGroupMembersRow{}
+	items := []ResourceGroup{}
 	for rows.Next() {
-		var i ListGroupMembersRow
+		var i ResourceGroup
 		if err := rows.Scan(
-			&i.UserID,
-			&i.Email,
+			&i.ID,
 			&i.Name,
-			&i.DisplayName,
-			&i.Role,
-			&i.Status,
-			&i.GrantID,
-			&i.Permission,
-			&i.GrantedAt,
+			&i.Description,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -266,6 +304,49 @@ order by rg.name
 
 func (q *Queries) ListReadableGroups(ctx context.Context, userID pgtype.UUID) ([]ResourceGroup, error) {
 	rows, err := q.db.Query(ctx, listReadableGroups, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ResourceGroup{}
+	for rows.Next() {
+		var i ResourceGroup
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Description,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReadableGroupsForResource = `-- name: ListReadableGroupsForResource :many
+select distinct rg.id, rg.name, rg.description, rg.created_at
+from group_resources gr
+join resource_groups rg on rg.id = gr.group_id
+join grants g on g.permission = 'group.read' and g.revoked_at is null
+  and g.target_kind = 'group' and g.target_id = rg.id
+where g.user_id = $1
+  and gr.resource_kind = $2
+  and gr.resource_id = $3
+order by rg.name
+`
+
+type ListReadableGroupsForResourceParams struct {
+	UserID       pgtype.UUID
+	ResourceKind string
+	ResourceID   pgtype.UUID
+}
+
+func (q *Queries) ListReadableGroupsForResource(ctx context.Context, arg ListReadableGroupsForResourceParams) ([]ResourceGroup, error) {
+	rows, err := q.db.Query(ctx, listReadableGroupsForResource, arg.UserID, arg.ResourceKind, arg.ResourceID)
 	if err != nil {
 		return nil, err
 	}

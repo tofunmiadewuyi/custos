@@ -55,6 +55,8 @@ func (s *Server) handleAddKey(w http.ResponseWriter, r *http.Request) {
 		serverError(w, "could not add key", err)
 		return
 	}
+	hosts, _ := s.q.UserGrantedHostIDs(r.Context(), auth.UserID)
+	s.pushToHosts(r.Context(), hosts)
 	s.writeResponse(w, auth.ClientPublicKey, publicKeyView{
 		ID:          uuidString(key.ID),
 		Label:       key.Label,

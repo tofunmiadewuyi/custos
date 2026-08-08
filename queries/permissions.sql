@@ -17,7 +17,7 @@ order by p.key;
 -- name: ListGlobalPermissions :many
 select key as permission, description
 from permissions
-where key in ('secret.add', 'group.create', 'set.add')
+where key in ('secret.add', 'group.create', 'host.add', 'set.add')
 order by key;
 
 -- name: UserHasSecretPermission :one
@@ -87,10 +87,14 @@ select exists (
 
 -- name: ListHostDirectAccess :many
 select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
-       g.permission, g.created_at, array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
+       g.permission, g.created_at,
+       coalesce(
+         array_agg(pk.fingerprint order by pk.fingerprint) filter (where pk.fingerprint is not null),
+         array[]::text[]
+       )::text[] as fingerprints
 from grants g
 join users u on u.id = g.user_id and u.status = 'active'
-join public_keys pk on pk.user_id = g.user_id
+left join public_keys pk on pk.user_id = g.user_id
 where g.revoked_at is null
   and g.permission = 'host.access'
   and g.target_kind = 'host' and g.target_id = @host_id
@@ -100,10 +104,13 @@ order by u.email;
 -- name: ListHostGroupAccess :many
 select g.id as grant_id, u.id as user_id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at,
        rg.id as group_id, rg.name as group_name,
-       array_agg(pk.fingerprint order by pk.fingerprint)::text[] as fingerprints
+       coalesce(
+         array_agg(pk.fingerprint order by pk.fingerprint) filter (where pk.fingerprint is not null),
+         array[]::text[]
+       )::text[] as fingerprints
 from grants g
 join users u on u.id = g.user_id and u.status = 'active'
-join public_keys pk on pk.user_id = g.user_id
+left join public_keys pk on pk.user_id = g.user_id
 join resource_groups rg on rg.id = g.target_id
 where g.revoked_at is null
   and g.permission = 'host.access'
@@ -114,6 +121,61 @@ where g.revoked_at is null
   )
 group by g.id, u.id, u.email, u.name, u.display_name, u.role, u.status, g.permission, g.created_at, rg.id, rg.name
 order by rg.name, u.email;
+
+-- name: ListHostAccessUsers :many
+with access_users as (
+  select distinct u.id as user_id, u.email, u.name, u.display_name, u.role, u.status
+  from grants g
+  join users u on u.id = g.user_id and u.status = 'active'
+  where g.revoked_at is null
+    and g.permission = 'host.access'
+    and (
+      (g.target_kind = 'host' and g.target_id = @host_id)
+      or (g.target_kind = 'group' and g.target_id in (
+        select group_id from group_resources
+        where resource_kind = 'host' and resource_id = @host_id
+      ))
+    )
+)
+select au.user_id, au.email, au.name, au.display_name, au.role, au.status,
+       coalesce(
+         array_agg(distinct pk.fingerprint order by pk.fingerprint) filter (where pk.fingerprint is not null),
+         array[]::text[]
+       )::text[] as fingerprints
+from access_users au
+left join public_keys pk on pk.user_id = au.user_id
+where @cursor_email::text = ''
+   or (au.email, au.user_id) > (@cursor_email::text, @cursor_id::uuid)
+group by au.user_id, au.email, au.name, au.display_name, au.role, au.status
+order by au.email, au.user_id
+limit @page_limit;
+
+-- name: ListHostAccessPathsForUsers :many
+select *
+from (
+  select g.user_id, g.id as grant_id, g.permission, g.created_at,
+         'direct'::text as via, null::uuid as group_id, ''::text as group_name
+  from grants g
+  where g.revoked_at is null
+    and g.permission = 'host.access'
+    and g.target_kind = 'host'
+    and g.target_id = @host_id
+    and g.user_id = any(@user_ids::uuid[])
+  union all
+  select g.user_id, g.id as grant_id, g.permission, g.created_at,
+         'group'::text as via, rg.id as group_id, rg.name as group_name
+  from grants g
+  join resource_groups rg on rg.id = g.target_id
+  where g.revoked_at is null
+    and g.permission = 'host.access'
+    and g.target_kind = 'group'
+    and g.user_id = any(@user_ids::uuid[])
+    and rg.id in (
+      select group_id from group_resources
+      where resource_kind = 'host' and resource_id = @host_id
+    )
+) paths
+order by user_id, via, group_name, created_at, grant_id;
 
 -- name: ListActiveAdmins :many
 select id as user_id, email, name, display_name, status from users

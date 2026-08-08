@@ -126,6 +126,45 @@ func (s *Server) handleListGroups(w http.ResponseWriter, r *http.Request) {
 	s.writeResponse(w, auth.ClientPublicKey, views)
 }
 
+func (s *Server) handleListGroupsForResource(w http.ResponseWriter, r *http.Request) {
+	auth := authFrom(r.Context())
+	resourceKind := chi.URLParam(r, "kind")
+	if resourceKind != "host" && resourceKind != "secret" && resourceKind != "set" {
+		http.Error(w, "resource kind must be host, secret or set", http.StatusBadRequest)
+		return
+	}
+	resourceID, err := parseUUID(chi.URLParam(r, "resourceID"))
+	if err != nil {
+		http.Error(w, "invalid resource id", http.StatusBadRequest)
+		return
+	}
+	views := []groupView{}
+	if auth.Role == "admin" {
+		rows, err := s.q.ListGroupsForResource(r.Context(), db.ListGroupsForResourceParams{
+			ResourceKind: resourceKind, ResourceID: resourceID,
+		})
+		if err != nil {
+			serverError(w, "could not list resource groups", err)
+			return
+		}
+		for _, g := range rows {
+			views = append(views, s.toGroupView(r.Context(), auth, g))
+		}
+	} else {
+		rows, err := s.q.ListReadableGroupsForResource(r.Context(), db.ListReadableGroupsForResourceParams{
+			UserID: auth.UserID, ResourceKind: resourceKind, ResourceID: resourceID,
+		})
+		if err != nil {
+			serverError(w, "could not list resource groups", err)
+			return
+		}
+		for _, g := range rows {
+			views = append(views, s.toGroupView(r.Context(), auth, g))
+		}
+	}
+	s.writeResponse(w, auth.ClientPublicKey, views)
+}
+
 func (s *Server) handleListGroupMembers(w http.ResponseWriter, r *http.Request) {
 	auth := authFrom(r.Context())
 	groupID, err := parseUUID(chi.URLParam(r, "id"))

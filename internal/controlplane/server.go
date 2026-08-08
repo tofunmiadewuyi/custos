@@ -109,6 +109,7 @@ func (s *Server) userRoutes(r chi.Router) {
 	r.Route("/groups", func(r chi.Router) {
 		r.Post("/", s.handleCreateGroup)
 		r.Get("/", s.handleListGroups)
+		r.Get("/resources/{kind}/{resourceID}", s.handleListGroupsForResource)
 		r.Get("/{id}/members", s.handleListGroupMembers)
 		r.Get("/{id}", s.handleGetGroup)
 		r.Put("/{id}", s.handleUpdateGroup)
@@ -134,6 +135,7 @@ func (s *Server) userRoutes(r chi.Router) {
 	r.Get("/hosts/{id}", s.handleGetHost)
 	r.Get("/hosts/{id}/audit", s.handleHostAudit)
 	r.Get("/hosts/{id}/access-audit", s.handleHostAccessAudit)
+	r.Post("/hosts/{id}/refresh", s.handleRefreshHost)
 	r.Post("/hosts/{id}/revoke", s.handleRevokeHost)
 	r.Post("/hosts/{id}/upgrade", s.handleUpgradeHost)
 	r.Post("/hosts/{id}/sets", s.handleBindSet)

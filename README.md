@@ -115,6 +115,10 @@ design.
     `host.access` on the host (`POST /grants`).
 11. `ssh` into the host — the login is gated by custos via the daemon.
 
+If a connected daemon still shows `cached ssh keys: 0`, force a resync with
+`POST /hosts/{id}/refresh`. The response includes `key_count`; if that is `0`, the control plane has
+no active `host.access` grant plus public key match for that host.
+
 ### Machine secrets (optional)
 
 To deliver app secrets to the host instead of (or besides) SSH access, see

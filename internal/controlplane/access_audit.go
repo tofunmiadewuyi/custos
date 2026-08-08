@@ -7,7 +7,30 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/tofunmiadewuyi/custos/internal/controlplane/db"
 )
+
+type accessPath struct {
+	Via        string    `json:"via"` // "direct" | "group"
+	GrantID    string    `json:"grant_id"`
+	Permission string    `json:"permission"`
+	GroupID    string    `json:"group_id,omitempty"`
+	GroupName  string    `json:"group_name,omitempty"`
+	GrantedAt  time.Time `json:"granted_at"`
+}
+
+type hostAccessEntry struct {
+	UserID       string       `json:"user_id"`
+	Email        string       `json:"email"`
+	Name         string       `json:"name"`
+	DisplayName  string       `json:"display_name"`
+	Role         string       `json:"role"`
+	Status       string       `json:"status"`
+	Fingerprints []string     `json:"fingerprints"`
+	Paths        []accessPath `json:"paths"`
+}
 
 // accessEntry is one path by which a user reaches a secret. A user may appear
 // more than once (e.g. a direct grant plus membership in two groups).
@@ -108,13 +131,14 @@ func (s *Server) handleSecretAccessAudit(w http.ResponseWriter, r *http.Request)
 }
 
 type hostAccessAuditView struct {
-	HostID   string        `json:"host_id"`
-	HostName string        `json:"host_name"`
-	Entries  []accessEntry `json:"entries"`
+	HostID     string            `json:"host_id"`
+	HostName   string            `json:"host_name"`
+	Entries    []hostAccessEntry `json:"entries"`
+	NextCursor string            `json:"next_cursor,omitempty"`
 }
 
-// handleHostAccessAudit reports who can SSH to a host: directly or via a group
-// the host belongs to. Admin API bypass does not apply to daemon SSH snapshots.
+// handleHostAccessAudit reports active users with host.access, grouped by user
+// so pagination never splits one user's direct/group access paths across pages.
 func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 	auth := authFrom(r.Context())
 	hostID, err := parseUUID(chi.URLParam(r, "id"))
@@ -137,42 +161,78 @@ func (s *Server) handleHostAccessAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	direct, err := s.q.ListHostDirectAccess(r.Context(), hostID)
+	limit, cur, err := userPageParams(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	users, err := s.q.ListHostAccessUsers(r.Context(), db.ListHostAccessUsersParams{
+		HostID:      hostID,
+		CursorEmail: cur.Email,
+		CursorID:    cur.ID,
+		PageLimit:   limit + 1,
+	})
 	if err != nil {
 		serverError(w, "could not load access", err)
 		return
 	}
-	group, err := s.q.ListHostGroupAccess(r.Context(), hostID)
-	if err != nil {
-		serverError(w, "could not load access", err)
-		return
+	var nextCursor string
+	if int32(len(users)) > limit {
+		last := users[limit-1]
+		nextCursor = encodeUserCursor(last.Email, last.UserID)
+		users = users[:limit]
 	}
-	entries := make([]accessEntry, 0, len(direct)+len(group))
-	for _, d := range direct {
-		at := d.CreatedAt.Time
-		entries = append(entries, accessEntry{
-			UserID: uuidString(d.UserID), Email: d.Email, Name: d.Name,
-			DisplayName: textString(d.DisplayName),
-			Role:        d.Role, Status: d.Status, Via: "direct",
-			GrantID:    uuidString(d.GrantID),
-			Permission: d.Permission, Fingerprints: d.Fingerprints, GrantedAt: &at,
+
+	entries := make([]hostAccessEntry, 0, len(users))
+	byUser := map[string]int{}
+	userIDs := make([]pgtype.UUID, 0, len(users))
+	for _, user := range users {
+		userID := uuidString(user.UserID)
+		byUser[userID] = len(entries)
+		userIDs = append(userIDs, user.UserID)
+		entries = append(entries, hostAccessEntry{
+			UserID:       userID,
+			Email:        user.Email,
+			Name:         user.Name,
+			DisplayName:  textString(user.DisplayName),
+			Role:         user.Role,
+			Status:       user.Status,
+			Fingerprints: user.Fingerprints,
+			Paths:        []accessPath{},
 		})
 	}
-	for _, g := range group {
-		at := g.CreatedAt.Time
-		entries = append(entries, accessEntry{
-			UserID: uuidString(g.UserID), Email: g.Email, Name: g.Name,
-			DisplayName: textString(g.DisplayName),
-			Role:        g.Role, Status: g.Status, Via: "group",
-			GrantID:    uuidString(g.GrantID),
-			Permission: g.Permission, Fingerprints: g.Fingerprints, GroupID: uuidString(g.GroupID),
-			GroupName: g.GroupName, GrantedAt: &at,
+	if len(userIDs) > 0 {
+		paths, err := s.q.ListHostAccessPathsForUsers(r.Context(), db.ListHostAccessPathsForUsersParams{
+			HostID: hostID, UserIds: userIDs,
 		})
+		if err != nil {
+			serverError(w, "could not load access paths", err)
+			return
+		}
+		for _, row := range paths {
+			idx, ok := byUser[uuidString(row.UserID)]
+			if !ok {
+				continue
+			}
+			path := accessPath{
+				Via:        row.Via,
+				GrantID:    uuidString(row.GrantID),
+				Permission: row.Permission,
+				GrantedAt:  row.CreatedAt.Time,
+			}
+			if row.GroupID.Valid {
+				path.GroupID = uuidString(row.GroupID)
+				path.GroupName = row.GroupName
+			}
+			entries[idx].Paths = append(entries[idx].Paths, path)
+		}
 	}
 
 	s.writeResponse(w, auth.ClientPublicKey, hostAccessAuditView{
-		HostID:   uuidString(host.ID),
-		HostName: host.Name,
-		Entries:  entries,
+		HostID:     uuidString(host.ID),
+		HostName:   host.Name,
+		Entries:    entries,
+		NextCursor: nextCursor,
 	})
 }

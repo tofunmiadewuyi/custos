@@ -10,7 +10,7 @@ import (
 
 // Permission catalogue: add a permission here and the can*/view/validation all follow.
 var (
-	allGlobalPermissions = []string{"group.create", "secret.add", "set.add"}
+	allGlobalPermissions = []string{"group.create", "host.add", "secret.add", "set.add"}
 	allGroupPermissions  = []string{"group.read", "group.manage"}
 	allHostPermissions   = []string{"host.access", "host.audit", "host.revoke", "host.upgrade"}
 	allSecretPermissions = []string{"secret.read", "secret.update", "secret.delete"}

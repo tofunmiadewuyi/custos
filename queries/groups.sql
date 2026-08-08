@@ -12,6 +12,24 @@ join grants g on g.permission = 'group.read' and g.revoked_at is null
 where g.user_id = $1
 order by rg.name;
 
+-- name: ListGroupsForResource :many
+select rg.id, rg.name, rg.description, rg.created_at
+from group_resources gr
+join resource_groups rg on rg.id = gr.group_id
+where gr.resource_kind = $1 and gr.resource_id = $2
+order by rg.name;
+
+-- name: ListReadableGroupsForResource :many
+select distinct rg.id, rg.name, rg.description, rg.created_at
+from group_resources gr
+join resource_groups rg on rg.id = gr.group_id
+join grants g on g.permission = 'group.read' and g.revoked_at is null
+  and g.target_kind = 'group' and g.target_id = rg.id
+where g.user_id = $1
+  and gr.resource_kind = $2
+  and gr.resource_id = $3
+order by rg.name;
+
 -- name: ListGroupMembers :many
 select u.id as user_id, u.email, u.name, u.display_name, u.role, u.status,
        g.id as grant_id, g.permission, g.created_at as granted_at
